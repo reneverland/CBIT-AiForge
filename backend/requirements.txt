@@ -30,7 +30,7 @@ peft==0.7.1
 datasets==2.15.0
 
 # LangChain
-langchain==0.0.350
+langchain==0.3.27
 langchain-community==0.0.5
 
 # OpenAI
