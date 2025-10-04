@@ -130,7 +130,7 @@ jobs:
       
       - name: Test docker-compose configuration
         run: |
-          docker-compose config
+          docker compose config
           echo "Docker Compose configuration is valid"
 
   security-scan:
@@ -152,7 +152,7 @@ jobs:
           exit-code: '0'
       
       - name: Upload Trivy results to GitHub Security
-        uses: github/codeql-action/upload-sarif@v2
+        uses: github/codeql-action/upload-sarif@v3
         if: always()
         with:
           sarif_file: 'trivy-results.sarif'
@@ -168,7 +168,7 @@ jobs:
       
       - name: Start services with docker-compose
         run: |
-          docker-compose up -d
+          docker compose up -d
           echo "Waiting for services to start..."
           sleep 30
       
@@ -190,12 +190,12 @@ jobs:
       - name: View container logs
         if: always()
         run: |
-          docker-compose logs backend
-          docker-compose logs frontend
+          docker compose logs backend
+          docker compose logs frontend
       
       - name: Stop services
         if: always()
-        run: docker-compose down -v
+        run: docker compose down -v
 
   build-status:
     name: Build Status Report
