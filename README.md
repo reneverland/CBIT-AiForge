@@ -2,6 +2,8 @@
 
 <div align="center">
 
+[![CI Pipeline](https://github.com/reneverland/CBIT-AiForge/workflows/CI%20Pipeline/badge.svg)](https://github.com/reneverland/CBIT-AiForge/actions)
+[![CodeQL](https://github.com/reneverland/CBIT-AiForge/workflows/CodeQL%20Security%20Scan/badge.svg)](https://github.com/reneverland/CBIT-AiForge/security)
 [![GitHub Stars](https://img.shields.io/github/stars/reneverland/CBIT-AiForge?style=social)](https://github.com/reneverland/CBIT-AiForge/stargazers)
 [![GitHub Forks](https://img.shields.io/github/forks/reneverland/CBIT-AiForge?style=social)](https://github.com/reneverland/CBIT-AiForge/network/members)
 [![GitHub Issues](https://img.shields.io/github/issues/reneverland/CBIT-AiForge)](https://github.com/reneverland/CBIT-AiForge/issues)
