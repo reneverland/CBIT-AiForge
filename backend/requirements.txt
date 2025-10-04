@@ -42,7 +42,7 @@ pydantic==2.5.2
 pydantic-settings==2.1.0
 aiofiles==23.2.1
 httpx==0.25.2
-tenacity==8.2.3
+tenacity==9.1.2
 
 # Monitoring
 loguru==0.7.2
