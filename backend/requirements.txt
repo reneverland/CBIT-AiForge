@@ -27,7 +27,7 @@ sentence-transformers==2.2.2
 accelerate==0.25.0
 bitsandbytes==0.41.3
 peft==0.7.1
-datasets==2.15.0
+datasets==4.1.1
 
 # LangChain
 langchain==0.0.350
