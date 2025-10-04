@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react'
-import { Cpu, Play, Square, Trash2, Info } from 'lucide-react'
+import { Cpu, Play, Square, Trash2 } from 'lucide-react'
 import axios from 'axios'
 
 export default function ModelsPage() {

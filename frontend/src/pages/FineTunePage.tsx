@@ -186,7 +186,7 @@ function Step1SelectTemplate({ templates, selectedTemplate, onSelect, onNext }: 
       </div>
 
       <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-        {templates.map((template) => (
+        {templates.map((template: any) => (
           <div
             key={template.key}
             onClick={() => onSelect(template.key)}
