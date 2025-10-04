@@ -1,0 +1,32 @@
+# CBIT-AiForge 最小依赖（本地开发）
+# Minimal Dependencies for Local Development
+
+# Web Framework
+fastapi==0.104.1
+uvicorn[standard]==0.24.0
+python-multipart==0.0.6
+
+# Database
+sqlalchemy==2.0.23
+
+# Vector Database
+chromadb==0.4.18
+
+# Utilities
+python-dotenv==1.0.0
+pydantic==2.5.2
+pydantic-settings==2.1.0
+aiofiles==23.2.1
+httpx==0.25.2
+
+# Monitoring
+loguru==0.7.2
+
+# Document Processing (基础)
+PyMuPDF==1.23.8
+python-docx==1.1.0
+openpyxl==3.1.2
+
+# 注意: 如需完整功能（AI/ML），请使用 requirements.txt
+# Note: For full functionality (AI/ML), use requirements.txt
+

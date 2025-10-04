@@ -6,7 +6,14 @@
 
 ```bash
 cd backend
-python run.py
+python3 run_dev.py
+```
+
+或者：
+
+```bash
+cd backend
+python3 run.py
 ```
 
 访问：http://localhost:5003

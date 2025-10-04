@@ -37,7 +37,7 @@ class Document(Base):
     status = Column(String(50), default="uploaded")  # uploaded, processing, completed, failed
     chunk_count = Column(Integer, default=0)
     error_message = Column(Text, nullable=True)
-    metadata = Column(JSON, nullable=True)
+    doc_metadata = Column(JSON, nullable=True)  # 重命名避免与SQLAlchemy保留字冲突
     created_at = Column(DateTime, default=datetime.utcnow)
     processed_at = Column(DateTime, nullable=True)
 
@@ -93,7 +93,7 @@ class InferenceLog(Base):
     response = Column(Text, nullable=False)
     tokens_used = Column(Integer, nullable=True)
     latency_ms = Column(Float, nullable=True)
-    metadata = Column(JSON, nullable=True)
+    log_metadata = Column(JSON, nullable=True)  # 重命名避免与SQLAlchemy保留字冲突
     created_at = Column(DateTime, default=datetime.utcnow)
 
 

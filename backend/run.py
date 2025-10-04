@@ -4,7 +4,7 @@ CBIT-AiForge 本地开发服务器
 Local Development Server
 
 用法 / Usage:
-    python run.py
+    python3 run.py
     
 访问 / Access:
     http://localhost:5003
