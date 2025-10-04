@@ -1,0 +1,49 @@
+FROM python:3.10-slim
+
+WORKDIR /app
+
+# 安装系统依赖
+RUN apt-get update && apt-get install -y \
+    build-essential \
+    git \
+    curl \
+    && rm -rf /var/lib/apt/lists/*
+
+# 复制依赖文件
+COPY backend/requirements.txt .
+
+# 安装 Python 依赖
+RUN pip install --no-cache-dir -r requirements.txt
+
+# 复制应用代码
+COPY backend/ .
+
+# 创建数据目录结构（容器内固定路径）
+RUN mkdir -p /app/app/data/chromadb \
+    /app/app/data/models \
+    /app/app/data/uploads \
+    /app/app/data/processed \
+    /app/logs && \
+    chmod -R 777 /app/app/data /app/logs
+
+# 设置环境变量（容器内固定配置）
+ENV PYTHONUNBUFFERED=1 \
+    USE_GPU=false \
+    DEBUG=false \
+    API_HOST=0.0.0.0 \
+    API_PORT=8000 \
+    DATA_DIR=/app/app/data \
+    CHROMA_DB_PATH=/app/app/data/chromadb \
+    SQLITE_DB_PATH=/app/app/data/forge.db \
+    UPLOAD_DIR=/app/app/data/uploads \
+    PROCESSED_DIR=/app/app/data/processed
+
+# 暴露端口
+EXPOSE 8000
+
+# 健康检查
+HEALTHCHECK --interval=30s --timeout=10s --start-period=5s --retries=3 \
+    CMD curl -f http://localhost:8000/health || exit 1
+
+# 启动命令
+CMD ["python", "-m", "uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000"]

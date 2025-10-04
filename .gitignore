@@ -1,0 +1,109 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+
+# Virtual Environment
+venv/
+env/
+ENV/
+.venv
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.DS_Store
+
+# Environment Variables
+.env
+.env.local
+.env.*.local
+
+# Database
+*.db
+*.sqlite
+*.sqlite3
+
+# ChromaDB
+backend/app/data/chromadb/
+
+# Models (large files)
+backend/app/data/models/
+*.bin
+*.safetensors
+*.gguf
+*.pth
+*.pt
+
+# Uploaded Documents
+backend/app/data/uploads/
+backend/app/data/processed/
+
+# Logs
+*.log
+logs/
+backend/logs/
+
+# Node.js
+node_modules/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+lerna-debug.log*
+
+# Frontend Build
+frontend/dist/
+frontend/dist-ssr/
+frontend/.next/
+frontend/out/
+frontend/build/
+
+# Frontend Temp
+frontend/.vite
+*.local
+
+# Docker
+*.pid
+*.seed
+*.pid.lock
+
+# OS
+Thumbs.db
+
+# Test
+.coverage
+htmlcov/
+.pytest_cache/
+.tox/
+
+# Jupyter
+.ipynb_checkpoints/
+*.ipynb
+
+# Temporary files
+*.tmp
+*.temp
+temp/
+tmp/
+

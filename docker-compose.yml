@@ -1,0 +1,57 @@
+version: '3.8'
+
+services:
+  backend:
+    build:
+      context: .
+      dockerfile: Dockerfile.backend
+    container_name: cbit_aiforge_backend
+    ports:
+      - "8000:8000"
+    volumes:
+      # 持久化数据存储
+      - aiforge_data:/app/app/data
+      - aiforge_logs:/app/logs
+    environment:
+      - USE_GPU=false
+      - DEBUG=false
+      - API_HOST=0.0.0.0
+      - API_PORT=8000
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+    networks:
+      - aiforge_network
+
+  frontend:
+    build:
+      context: .
+      dockerfile: Dockerfile.frontend
+    container_name: cbit_aiforge_frontend
+    ports:
+      - "80:80"
+    depends_on:
+      backend:
+        condition: service_healthy
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost/"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+    networks:
+      - aiforge_network
+
+networks:
+  aiforge_network:
+    driver: bridge
+
+volumes:
+  aiforge_data:
+    driver: local
+  aiforge_logs:
+    driver: local
