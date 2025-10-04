@@ -174,7 +174,7 @@ jobs:
         run: |
           docker compose up -d
           echo "Waiting for services to start..."
-          sleep 60
+          sleep 90
       
       - name: Check backend health
         run: |
