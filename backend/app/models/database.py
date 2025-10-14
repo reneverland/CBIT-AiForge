@@ -155,81 +155,46 @@ class SearchProvider(Base):
 
 
 class Application(Base):
-    """应用实例表"""
+    """应用实例表 v3.0 - 简化版
+    
+    核心简化：从30+配置字段简化到12个核心字段
+    使用 mode + mode_config 替代大量独立配置字段
+    """
     __tablename__ = "applications"
     
+    # ========== 基础信息 ==========
     id = Column(Integer, primary_key=True, index=True)
     name = Column(String(255), unique=True, nullable=False)
     description = Column(Text, nullable=True)
     
-    # LLM配置
-    ai_provider = Column(String(50), nullable=False)  # openai, anthropic, etc.
-    llm_model = Column(String(255), nullable=False)  # 模型名称
+    # ========== 核心工作模式 ==========
+    mode = Column(String(50), default="standard", nullable=False)
+    """工作模式：safe(安全), standard(标准), enhanced(增强)"""
     
-    # 知识源启用开关
-    enable_fixed_qa = Column(Boolean, default=False)
-    enable_vector_kb = Column(Boolean, default=False)
-    enable_web_search = Column(Boolean, default=False)
+    mode_config = Column(JSON, nullable=True)
+    """模式配置（JSON格式存储各模式的特定参数）"""
     
-    # 对话配置
-    enable_context = Column(Boolean, default=False)  # 是否启用上下文对话
-    
-    # 检索策略配置
-    similarity_threshold_high = Column(Float, default=0.90)  # 高阈值(直接回答)
-    similarity_threshold_low = Column(Float, default=0.75)   # 低阈值(提供建议)
-    retrieval_strategy = Column(String(50), default="priority")  # priority, weighted_avg, max_score, voting, multi_source
-    top_k = Column(Integer, default=5)
-    
-    # 知识源权重
-    fixed_qa_weight = Column(Float, default=1.0)
-    vector_kb_weight = Column(Float, default=1.0)
-    web_search_weight = Column(Float, default=1.0)
-    
-    # 融合策略配置
-    fusion_strategy = Column(String(50), default="weighted_avg")  # weighted_avg, max_score, voting, multi_source_fusion
-    fusion_config = Column(JSON, nullable=True)  # 自定义融合配置
-    
-    # 搜索配置
-    search_provider_id = Column(Integer, nullable=True)  # 搜索服务提供商ID (新增)
-    web_search_domains = Column(JSON, nullable=True)  # 白名单域名列表
-    search_channels = Column(JSON, nullable=True)  # [internal, official, academic, web]
-    
-    # 预处理配置
-    enable_preprocessing = Column(Boolean, default=True)
-    enable_intent_recognition = Column(Boolean, default=True)
-    enable_language_detection = Column(Boolean, default=True)
-    enable_sensitive_filter = Column(Boolean, default=False)
-    sensitive_words = Column(JSON, nullable=True)  # 敏感词库
-    
-    # 其他配置
-    enable_source_tracking = Column(Boolean, default=True)  # 来源追溯
-    enable_citation = Column(Boolean, default=True)  # 引用标注
-    system_prompt = Column(Text, nullable=True)
+    # ========== AI配置 ==========
+    ai_provider = Column(String(50), nullable=False)
+    llm_model = Column(String(255), nullable=False)
     temperature = Column(Float, default=0.7)
-    max_tokens = Column(Integer, default=2000)
     
-    # 自定义未达阈值回复配置
-    enable_custom_no_result_response = Column(Boolean, default=False)  # 启用自定义未达阈值回复
-    custom_no_result_response = Column(Text, nullable=True)  # 自定义回复文本
-    
-    # LLM润色配置
-    enable_llm_polish = Column(Boolean, default=True)  # 启用LLM润色，让回答更自然（默认启用）
-    
-    # 🆕 策略模式配置（v2.0）
-    strategy_mode = Column(String(50), default="safe_priority")  # safe_priority(安全优先), realtime_knowledge(实时知识)
-    web_search_auto_threshold = Column(Float, default=0.50)  # 自动联网阈值（低于此值自动联网，仅在realtime_knowledge模式生效）
-    
-    # API配置
-    api_key = Column(String(255), unique=True, nullable=False)  # 应用专属API密钥
-    endpoint_path = Column(String(255), unique=True, nullable=False)  # API路径
+    # ========== API配置 ==========
+    api_key = Column(String(255), unique=True, nullable=False)
+    endpoint_path = Column(String(255), unique=True, nullable=False)
     is_active = Column(Boolean, default=True)
     
-    # 统计信息
+    # ========== 统计信息 ==========
     total_requests = Column(Integer, default=0)
     total_tokens = Column(Integer, default=0)
     
     created_at = Column(DateTime, default=datetime.utcnow)
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+    
+    def get_mode_config_with_defaults(self):
+        """获取模式配置（含默认值）"""
+        from app.core.mode_presets import get_mode_config
+        return get_mode_config(self.mode, self.mode_config)
 
 
 class ApplicationKnowledgeBase(Base):
