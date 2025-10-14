@@ -11,13 +11,30 @@ from app.core.config import settings
 class QAGenerator:
     """QA 格式生成器"""
     
-    def __init__(self):
+    def __init__(self, api_key: str = None, base_url: str = None, model: str = None):
+        """
+        初始化 QA 生成器
+        
+        Args:
+            api_key: OpenAI API密钥（优先使用传入的，否则使用settings）
+            base_url: OpenAI API基础URL（优先使用传入的，否则使用settings）
+            model: 使用的模型名称（默认使用settings中的）
+        """
         self.client = None
-        if settings.OPENAI_API_KEY:
+        self.model = model or settings.OPENAI_MODEL
+        
+        # 优先使用传入的配置，否则使用settings
+        final_api_key = api_key or settings.OPENAI_API_KEY
+        final_base_url = base_url or settings.OPENAI_BASE_URL
+        
+        if final_api_key:
             self.client = AsyncOpenAI(
-                api_key=settings.OPENAI_API_KEY,
-                base_url=settings.OPENAI_BASE_URL,
+                api_key=final_api_key,
+                base_url=final_base_url,
             )
+            logger.info(f"✅ QA Generator 初始化成功，使用模型: {self.model}")
+        else:
+            logger.warning("⚠️ QA Generator 初始化失败：未提供 OpenAI API 密钥")
     
     async def generate_qa_pairs(
         self,
@@ -60,7 +77,7 @@ class QAGenerator:
 
         try:
             response = await self.client.chat.completions.create(
-                model=settings.OPENAI_MODEL,
+                model=self.model,
                 messages=[
                     {"role": "system", "content": "你是一个专业的数据标注专家。"},
                     {"role": "user", "content": prompt}

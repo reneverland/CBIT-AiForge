@@ -1,88 +1,212 @@
-# 快速开始指南
+# ⚡ 快速开始指南
 
-## 🚀 方式一：使用启动脚本（推荐）
+本文档帮助你在 5 分钟内启动 CBIT-AiForge 平台。
+
+## 📋 前置要求
+
+- Python 3.9+
+- Node.js 16+
+- npm 或 yarn
+
+## 🚀 方式一：一键启动（推荐）
 
 ```bash
-./start.sh
+# 在项目根目录执行
+./一键启动.sh
 ```
 
-这个脚本会自动：
-1. 创建 Python 虚拟环境
-2. 安装所有依赖
-3. 启动后端和前端服务
+脚本会自动：
+1. 检查并安装后端依赖
+2. 检查并安装前端依赖
+3. 启动后端服务（端口 5003）
+4. 启动前端服务（端口 5173）
 
-## 📦 方式二：手动启动
+## 🔧 方式二：手动启动
 
-### 后端
+### 1. 启动后端
 
 ```bash
 cd backend
-python -m venv venv
-source venv/bin/activate  # Windows: venv\Scripts\activate
+
+# 首次运行：安装依赖
 pip install -r requirements.txt
-python -m uvicorn app.main:app --reload
+
+# 启动服务
+python3 run.py
 ```
 
-### 前端
+后端服务将在 `http://localhost:5003` 启动。
+
+### 2. 启动前端
+
+打开新终端：
 
 ```bash
 cd frontend
+
+# 首次运行：安装依赖
 npm install
+
+# 启动服务
 npm run dev
 ```
 
-## 🐳 方式三：Docker 部署
+前端服务将在 `http://localhost:5173` 启动。
 
-### CPU 版本
+## 🌐 访问平台
 
-```bash
-docker-compose up -d
+浏览器打开：`http://localhost:5173`
+
+## 🎯 快速配置
+
+### 第一步：配置 AI 提供商
+
+1. 进入 **AI提供商配置** 页面
+2. 添加 OpenAI 配置：
+   - 提供商类型：OpenAI
+   - API Key：你的 OpenAI API Key
+   - Base URL：`https://api.openai.com/v1`（可选）
+   - 模型名称：`gpt-3.5-turbo` 或 `gpt-4`
+3. 点击保存并测试连接
+
+### 第二步：创建知识库
+
+1. 进入 **知识库管理** 页面
+2. 点击 **创建知识库**
+3. 填写基本信息：
+   - 知识库名称
+   - 描述
+   - 选择向量数据库（默认 ChromaDB）
+   - 选择嵌入模型
+4. 点击创建
+
+### 第三步：上传知识
+
+两种方式添加知识：
+
+#### 方式 A：文件上传
+1. 点击 **上传文档**
+2. 选择文件（支持 PDF、TXT、DOC、DOCX、MD）
+3. 系统自动处理并向量化
+
+#### 方式 B：智能文本拆分 ⭐
+1. 点击 **智能拆分**
+2. 选择输入方式：
+   - **文本输入**：直接粘贴文本
+   - **文件上传**：上传 TXT/MD/DOC/DOCX
+3. 选择拆分策略：
+   - 🤖 **智能推荐** - AI 自动选择（推荐）
+   - 💬 **问答格式** - 识别 `::` 分隔符
+   - 🎯 **语义拆分** - AI 识别语义边界
+   - 📄 **段落拆分** - 按自然段落
+   - ✂️ **固定长度** - 按字符数
+4. 点击 **开始拆分** → 预览结果
+5. 确认无误后点击 **导入知识库**
+
+**💡 问答格式示例：**
+```
+问题1::答案1
+问题2::答案2
 ```
 
-### GPU 版本
+### 第四步：创建应用实例
+
+1. 进入 **应用管理** 页面
+2. 点击 **创建应用**
+3. 配置参数：
+   - 应用名称
+   - 选择知识库
+   - 选择检索策略：
+     - 🔒 **安全优先** - 仅使用知识库（不联网）
+     - 🌐 **实时知识** - 允许联网搜索
+   - 配置融合算法（RRF / 加权平均 / 线性组合）
+   - 设置触发阈值（0.0-1.0）
+4. 点击创建
+
+### 第五步：开始对话
+
+1. 进入 **智能推理 Playground** 页面
+2. 选择已创建的应用实例
+3. 输入问题，开始对话！
+
+系统会：
+- ✅ 自动检索相关知识
+- ✅ 显示引用来源和置信度
+- ✅ 支持多轮对话上下文
+- ✅ 必要时联网搜索（实时知识模式）
+
+## 🔍 高级功能
+
+### 固定 Q&A 对
+
+在 **固定问答管理** 页面添加精确匹配的问答对，优先级高于向量检索。
+
+适用场景：
+- 常见问题（FAQ）
+- 标准答案
+- 政策法规
+
+### 联网搜索
+
+配置 Tavily API Key 后，启用实时知识模式即可自动联网搜索。
+
+### 向量数据库切换
+
+支持切换到 Qdrant 或 Pinecone：
+
+1. 进入 **向量数据库管理** 页面
+2. 添加新的向量数据库配置
+3. 在创建知识库时选择对应的数据库
+
+## 🆘 常见问题
+
+### Q: 端口被占用？
 
 ```bash
-docker-compose -f docker-compose.gpu.yml up -d
+# 杀掉占用端口的进程
+lsof -ti:5003 | xargs kill -9  # 后端
+lsof -ti:5173 | xargs kill -9  # 前端
 ```
 
-## 🎯 访问应用
+### Q: 数据库路径在哪？
 
-- **前端**: http://localhost:5173
-- **后端 API**: http://localhost:8000
-- **API 文档**: http://localhost:8000/docs
+主数据库：`backend/app/data/forge.db`
 
-## 📝 配置 OpenAI API（可选）
-
-如果需要使用 OpenAI 辅助生成训练数据：
+### Q: 如何重置数据？
 
 ```bash
-cd backend
-cp .env.example .env
-# 编辑 .env 文件，添加你的 OPENAI_API_KEY
+# 删除数据库（谨慎操作！）
+rm backend/app/data/forge.db
+rm -rf backend/app/data/chromadb
+
+# 重启后端会自动创建新数据库
+python3 backend/run.py
 ```
 
-## 💡 使用流程
+### Q: API 文档在哪？
 
-1. **创建知识库** → 知识库管理页面
-2. **上传文档** → 选择知识库后上传
-3. **微调模型** → 模型微调页面，按步骤操作
-4. **推理测试** → 推理测试页面，选择模型/知识库进行对话
+启动后端后访问：
+- Swagger UI: `http://localhost:5003/docs`
+- ReDoc: `http://localhost:5003/redoc`
 
-## 🔧 故障排除
+### Q: 前端无法连接后端？
 
-### 端口被占用
+检查 API_BASE 配置是否为 `http://localhost:5003`。
 
-修改 `backend/app/core/config.py` 中的 `API_PORT`
+### Q: 智能拆分没反应？
 
-### 依赖安装失败
+确保已配置 AI 提供商并且 API Key 有效。
 
-确保 Python 3.10+ 和 Node.js 18+ 已正确安装
+## 📚 更多文档
 
-### GPU 相关问题
+- [完整文档](README.md)
+- [部署指南](DEPLOYMENT.md)
+- [API 文档](http://localhost:5003/docs)
 
-本地开发默认使用 CPU 模式，实际训练和推理需要在 GPU 服务器上部署
+## 🎉 开始使用吧！
+
+有任何问题欢迎提 Issue 或联系作者。
 
 ---
 
-© 2025 Reneverland, CBIT, CUHK
-
+© 2025 CBIT-AiForge. All rights reserved.

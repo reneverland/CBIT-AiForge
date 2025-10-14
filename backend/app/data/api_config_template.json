@@ -1,0 +1,37 @@
+{
+  "_comment": "这是API配置模板文件，复制为 api_config.json 并填入您的真实配置",
+  "_instructions": "1. 将此文件重命名为 api_config.json  2. 填入您的API密钥  3. 系统会自动加载配置",
+  
+  "embedding_providers": [
+    {
+      "name": "OpenAI Embedding",
+      "provider_type": "openai",
+      "api_key": "YOUR_OPENAI_API_KEY_HERE",
+      "base_url": "https://api.openai.com/v1",
+      "model_name": "text-embedding-3-small",
+      "dimension": 1536,
+      "is_default": true
+    }
+  ],
+  
+  "vector_db_providers": [
+    {
+      "name": "Qdrant Cloud",
+      "provider_type": "qdrant",
+      "host": "your-cluster-id.qdrant.io",
+      "port": 6333,
+      "api_key": "YOUR_QDRANT_API_KEY_HERE",
+      "is_default": true
+    }
+  ],
+  
+  "ai_providers": [
+    {
+      "name": "OpenAI GPT",
+      "provider_type": "openai",
+      "api_key": "YOUR_OPENAI_API_KEY_HERE",
+      "base_url": "https://api.openai.com/v1",
+      "models": "gpt-3.5-turbo,gpt-4"
+    }
+  ]
+}

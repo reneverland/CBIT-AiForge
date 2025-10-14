@@ -53,5 +53,16 @@
     @apply bg-background text-foreground;
     font-feature-settings: "rlig" 1, "calt" 1;
   }
+  
+  /* 暗色主题下的select option样式 */
+  select option {
+    background-color: rgb(30, 41, 59); /* slate-800 */
+    color: white;
+    padding: 0.5rem;
+  }
+  
+  select {
+    color-scheme: dark;
+  }
 }
 

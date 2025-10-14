@@ -20,7 +20,8 @@ class Settings(BaseSettings):
     MODEL_CACHE_DIR: Path = Path("./app/data/models")
     HF_TOKEN: str = ""
     
-    # 数据存储路径
+    # 数据存储路径（支持环境变量配置，方便迁移部署）
+    # 可通过.env文件或环境变量覆盖默认路径
     DATA_DIR: Path = Path("./app/data")
     CHROMA_DB_PATH: Path = Path("./app/data/chromadb")
     SQLITE_DB_PATH: Path = Path("./app/data/forge.db")

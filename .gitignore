@@ -19,14 +19,15 @@ wheels/
 *.egg-info/
 .installed.cfg
 *.egg
+MANIFEST
 
 # Virtual Environment
 venv/
-env/
 ENV/
+env/
 .venv
 
-# IDE
+# IDEs
 .vscode/
 .idea/
 *.swp
@@ -34,76 +35,69 @@ ENV/
 *~
 .DS_Store
 
-# Environment Variables
-.env
-.env.local
-.env.*.local
-
-# Database
-*.db
-*.sqlite
-*.sqlite3
-
-# ChromaDB
-backend/app/data/chromadb/
-
-# Models (large files)
-backend/app/data/models/
-*.bin
-*.safetensors
-*.gguf
-*.pth
-*.pt
-
-# Uploaded Documents
-backend/app/data/uploads/
-backend/app/data/processed/
-
 # Logs
 *.log
 logs/
 backend/logs/
+backend_server.log
+frontend.log
+
+# Database
+*.db
+*.db-journal
+*.sqlite3
+backend/app/data/forge.db
+backend/app/data/chromadb/
+app/data/forge.db
+app/data/chromadb/
+
+# Uploads and processed files
+backend/app/data/uploads/
+backend/app/data/processed/
+backend/app/data/models/
+
+# API Configuration
+backend/app/data/api_config.json
 
 # Node.js
 node_modules/
 npm-debug.log*
 yarn-debug.log*
 yarn-error.log*
-pnpm-debug.log*
-lerna-debug.log*
+.pnpm-debug.log*
 
-# Frontend Build
-frontend/dist/
-frontend/dist-ssr/
-frontend/.next/
-frontend/out/
-frontend/build/
-
-# Frontend Temp
-frontend/.vite
+# Build outputs
+dist/
+dist-ssr/
 *.local
 
-# Docker
-*.pid
-*.seed
-*.pid.lock
+# Environment variables
+.env
+.env.local
+.env.*.local
 
-# OS
-Thumbs.db
-
-# Test
-.coverage
-htmlcov/
-.pytest_cache/
-.tox/
-
-# Jupyter
-.ipynb_checkpoints/
-*.ipynb
+# Testing
+coverage/
+.nyc_output/
+*.test.js.snap
 
 # Temporary files
 *.tmp
 *.temp
-temp/
-tmp/
+.cache/
+backend.pid
 
+# OS
+Thumbs.db
+.DS_Store
+
+# Backup files
+*.bak
+*.backup
+*~
+
+# Documentation (generated)
+docs/_build/
+
+# Deployment
+docker-compose.override.yml

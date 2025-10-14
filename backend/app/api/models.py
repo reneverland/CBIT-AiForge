@@ -14,6 +14,7 @@ router = APIRouter()
 
 
 @router.get("/")
+@router.get("")
 async def list_models(
     skip: int = 0,
     limit: int = 20,

@@ -8,14 +8,16 @@ Website: http://cbit.cuhk.edu.cn
 
 from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, FileResponse
+from fastapi.staticfiles import StaticFiles
 from contextlib import asynccontextmanager
 import uvicorn
 from loguru import logger
 import sys
+from pathlib import Path
 
 from app.core.config import settings
-from app.api import documents, knowledge_bases, training, models, inference
+from app.api import documents, knowledge_bases, training, models, inference, ai_providers, embedding_providers, applications, fixed_qa, app_inference, search_providers, vector_db_providers
 from app.models.database import init_db
 
 # 配置日志
@@ -49,6 +51,20 @@ async def lifespan(app: FastAPI):
     settings.PROCESSED_DIR.mkdir(parents=True, exist_ok=True)
     settings.MODEL_CACHE_DIR.mkdir(parents=True, exist_ok=True)
     logger.info("✅ 目录结构创建完成")
+    
+    # 自动加载API配置（如果存在）
+    try:
+        from app.utils.config_loader import auto_load_config
+        from app.models.database import SessionLocal
+        
+        db = SessionLocal()
+        try:
+            if auto_load_config(db):
+                logger.info("✅ API配置自动导入完成")
+        finally:
+            db.close()
+    except Exception as e:
+        logger.warning(f"⚠️ API配置自动导入失败: {e}")
     
     logger.info(f"✅ cbitXForge 启动成功！监听端口: {settings.API_PORT}")
     
@@ -92,7 +108,7 @@ async def global_exception_handler(request: Request, exc: Exception):
 
 
 # 健康检查
-@app.get("/health", tags=["系统"])
+@app.get("/api/health", tags=["系统"])
 async def health_check():
     """健康检查端点"""
     return {
@@ -103,9 +119,9 @@ async def health_check():
     }
 
 
-@app.get("/", tags=["系统"])
-async def root():
-    """根路径"""
+@app.get("/api/info", tags=["系统"])
+async def api_info():
+    """API信息"""
     return {
         "message": "欢迎使用 cbitXForge API",
         "description": "计算与推理大模型服务平台",
@@ -122,6 +138,44 @@ app.include_router(knowledge_bases.router, prefix="/api/knowledge-bases", tags=[
 app.include_router(training.router, prefix="/api/training", tags=["模型微调"])
 app.include_router(models.router, prefix="/api/models", tags=["模型管理"])
 app.include_router(inference.router, prefix="/v1", tags=["推理服务 (OpenAI 兼容)"])
+app.include_router(ai_providers.router, prefix="/api/ai-providers", tags=["AI提供商配置"])
+app.include_router(embedding_providers.router, prefix="/api/embedding-providers", tags=["Embedding配置"])
+app.include_router(search_providers.router, prefix="/api/search-providers", tags=["搜索服务配置"])
+app.include_router(vector_db_providers.router, prefix="/api/vector-db-providers", tags=["向量数据库配置"])
+app.include_router(applications.router, prefix="/api/applications", tags=["应用管理"])
+app.include_router(fixed_qa.router, prefix="/api/fixed-qa", tags=["固定Q&A管理"])
+app.include_router(app_inference.router, prefix="/api", tags=["应用推理API"])
+
+# Serve 前端静态文件（在所有API路由之后）
+frontend_dist = Path(__file__).parent.parent.parent / "frontend" / "dist"
+if frontend_dist.exists():
+    # Mount assets directory
+    app.mount("/assets", StaticFiles(directory=str(frontend_dist / "assets")), name="assets")
+    
+    # Catch-all route for SPA (must be last)
+    @app.get("/{full_path:path}", include_in_schema=False)
+    async def serve_frontend(full_path: str):
+        """Serve frontend SPA - 所有非API路由返回index.html"""
+        # Skip API routes (already handled above)
+        if full_path.startswith("api") or full_path.startswith("v1") or full_path in ["docs", "redoc", "openapi.json"]:
+            return JSONResponse({"error": "Not Found"}, status_code=404)
+        
+        # Try to serve static file
+        if full_path and not full_path.endswith("/"):
+            file_path = frontend_dist / full_path
+            if file_path.is_file():
+                return FileResponse(file_path)
+        
+        # Return index.html for SPA routing
+        index_path = frontend_dist / "index.html"
+        if index_path.exists():
+            return FileResponse(index_path)
+        
+        return JSONResponse({"error": "Frontend not built"}, status_code=404)
+    
+    logger.info(f"✅ 前端静态文件服务已启用: {frontend_dist}")
+else:
+    logger.warning(f"⚠️  前端静态文件不存在: {frontend_dist}。请先构建前端：cd frontend && npm run build")
 
 
 if __name__ == "__main__":

@@ -15,6 +15,7 @@ from datetime import datetime
 from app.models.database import get_db, Model as ModelModel, InferenceLog
 from app.core.rag_engine import RAGEngine
 from app.models.database import KnowledgeBase as KnowledgeBaseModel
+from app.core.multi_model_engine import multi_model_engine
 
 router = APIRouter()
 rag_engine = RAGEngine()
@@ -33,6 +34,7 @@ class ChatCompletionRequest(BaseModel):
     stream: bool = False
     knowledge_base: Optional[str] = None  # 知识库名称（可选）
     n_results: int = 3  # RAG 检索数量
+    provider: Optional[str] = None  # AI提供商（openai, deepseek等）
 
 
 class ChatCompletionResponse(BaseModel):
@@ -99,8 +101,42 @@ async def chat_completions(
                     Message(role="user", content=user_message)
                 ]
         
-        # 模拟推理（实际部署中会调用真实模型）
-        response_text = f"""[cbitXForge 模拟响应]
+        # 使用多模型引擎进行推理
+        if request.provider and request.provider in multi_model_engine.api_keys:
+            # 使用指定的AI提供商
+            logger.info(f"🚀 使用 {request.provider} 提供商进行推理: {request.model}")
+            
+            # 转换消息格式
+            messages_dict = [{"role": msg.role, "content": msg.content} for msg in request.messages]
+            
+            try:
+                ai_response = await multi_model_engine.chat_completion(
+                    provider=request.provider,
+                    model=request.model,
+                    messages=messages_dict,
+                    temperature=request.temperature,
+                    max_tokens=request.max_tokens,
+                    stream=False
+                )
+                
+                response_text = ai_response["choices"][0]["message"]["content"]
+                logger.info(f"✅ 推理成功: {len(response_text)} 字符")
+                
+            except Exception as e:
+                logger.error(f"❌ AI提供商推理失败: {e}")
+                # 回退到模拟响应
+                response_text = f"""[推理失败]
+
+抱歉，调用 {request.provider} API 时出现错误：{str(e)}
+
+请检查：
+1. API密钥是否有效
+2. 模型名称是否正确
+3. API额度是否充足"""
+        else:
+            # 模拟推理（用于本地模型或未配置提供商）
+            logger.info(f"📋 使用模拟响应: {request.model}")
+            response_text = f"""[cbitXForge 模拟响应]
 
 问题: {user_message}
 
@@ -110,10 +146,7 @@ async def chat_completions(
 
 {'使用了 RAG 检索增强，基于相关文档生成回答。' if request.knowledge_base else '直接使用模型生成回答。'}
 
-实际部署说明：
-1. 需要在 GPU 服务器上加载模型
-2. 使用 vLLM 或 Transformers 进行推理
-3. 支持流式输出和批处理
+提示：请在"AI提供商配置"页面配置API密钥，然后选择对应的模型即可进行真实推理。
 
 版权所有 © 2025 Reneverland, CBIT, CUHK"""
         
@@ -125,6 +158,7 @@ async def chat_completions(
             latency_ms=(time.time() - start_time) * 1000,
             metadata={
                 "model": request.model,
+                "provider": request.provider,
                 "knowledge_base": request.knowledge_base,
                 "temperature": request.temperature,
             }
