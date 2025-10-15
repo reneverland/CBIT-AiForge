@@ -100,38 +100,47 @@ def get_app_by_id(app_id: int, db: Session) -> Optional[Application]:
 
 
 async def prepare_app_context(app: Application, db: Session) -> Dict[str, Any]:
-    """准备应用上下文（知识库、Q&A等）"""
-    # 获取应用配置
+    """准备应用上下文（知识库、Q&A等） - v3.0适配版"""
+    # 获取完整配置（含默认值）
+    full_config = app.get_mode_config_with_defaults()
+    
+    # v3.0: 根据mode和priority_order判断启用的功能
+    priority_order = full_config.get("priority_order", [])
+    enable_fixed_qa = any("fixed_qa" in item for item in priority_order)
+    enable_vector_kb = "vector_kb" in priority_order
+    enable_web_search = full_config.get("allow_web_search", False)
+    
+    # 获取应用配置（适配v3.0）
     app_config = {
         "id": app.id,
         "name": app.name,
-        "enable_fixed_qa": app.enable_fixed_qa,
-        "enable_vector_kb": app.enable_vector_kb,
-        "enable_web_search": app.enable_web_search,
-        # 🆕 策略模式配置（v2.0）
-        "strategy_mode": getattr(app, 'strategy_mode', 'safe_priority'),
-        "web_search_auto_threshold": getattr(app, 'web_search_auto_threshold', 0.50),
-        "similarity_threshold_high": app.similarity_threshold_high,
-        "similarity_threshold_low": app.similarity_threshold_low,
-        "retrieval_strategy": app.retrieval_strategy,
-        "top_k": app.top_k,
-        "fixed_qa_weight": app.fixed_qa_weight,
-        "vector_kb_weight": app.vector_kb_weight,
-        "web_search_weight": app.web_search_weight,
-        "fusion_strategy": app.fusion_strategy,
-        "fusion_config": app.fusion_config or {},  # 确保不是None
-        "web_search_domains": app.web_search_domains,
-        "search_channels": app.search_channels,
-        "enable_preprocessing": app.enable_preprocessing,
-        "enable_intent_recognition": app.enable_intent_recognition,
-        "enable_language_detection": app.enable_language_detection,
-        "enable_sensitive_filter": app.enable_sensitive_filter,
-        "sensitive_words": app.sensitive_words,
-        "enable_source_tracking": app.enable_source_tracking,
-        "enable_citation": app.enable_citation,
-        "system_prompt": app.system_prompt,
+        "enable_fixed_qa": enable_fixed_qa,
+        "enable_vector_kb": enable_vector_kb,
+        "enable_web_search": enable_web_search,
+        # 策略模式配置
+        "strategy_mode": "safe_priority",  # v3.0默认安全优先
+        "web_search_auto_threshold": full_config.get("web_search_auto_threshold", 0.50),
+        "similarity_threshold_high": full_config.get("fixed_qa_threshold", 0.90),
+        "similarity_threshold_low": full_config.get("recommend_threshold", 0.65),
+        "retrieval_strategy": "priority",
+        "top_k": full_config.get("top_k", 5),
+        "fixed_qa_weight": 1.0,
+        "vector_kb_weight": 1.0,
+        "web_search_weight": 1.0,
+        "fusion_strategy": "weighted_avg",
+        "fusion_config": full_config,  # 使用完整配置
+        "web_search_domains": full_config.get("web_search_domains", []),
+        "search_channels": full_config.get("search_channels", []),
+        "enable_preprocessing": True,
+        "enable_intent_recognition": True,
+        "enable_language_detection": True,
+        "enable_sensitive_filter": False,
+        "sensitive_words": [],
+        "enable_source_tracking": full_config.get("enable_source_tracking", True),
+        "enable_citation": full_config.get("enable_citation", True),
+        "system_prompt": None,
         "temperature": app.temperature,
-        "max_tokens": app.max_tokens
+        "max_tokens": full_config.get("max_tokens", 2000)
     }
     
     # 🔑 关键修复：确保融合策略配置中包含fixed_qa配置
@@ -364,8 +373,8 @@ async def app_chat_completion(
     # 准备上下文
     context = await prepare_app_context(app, db)
     
-    logger.info(f"🎯 应用 [{app.name}] 收到查询: {query}")
-    logger.info(f"📊 应用配置 - 固定Q&A: {app.enable_fixed_qa}, 向量检索: {app.enable_vector_kb}, 联网搜索: {app.enable_web_search}")
+    logger.info(f"🎯 应用 [{app.name}] (模式: {app.mode}) 收到查询: {query}")
+    logger.info(f"📊 应用配置 - 固定Q&A: {context['app_config']['enable_fixed_qa']}, 向量检索: {context['app_config']['enable_vector_kb']}, 联网搜索: {context['app_config']['enable_web_search']}")
     logger.info(f"📚 关联知识库数量: {len(context['knowledge_bases'])}")
     if context['knowledge_bases']:
         kb_names = [kb['name'] for kb in context['knowledge_bases']]
@@ -488,7 +497,7 @@ async def app_chat_completion(
         strategy_mode = context["app_config"].get("strategy_mode", "safe_priority")
         
         # 🛡️ 安全优先模式 - 提示用户授权联网
-        if strategy_mode == "safe_priority" and app.enable_web_search:
+        if strategy_mode == "safe_priority" and context["app_config"]["enable_web_search"]:
             logger.info(f"🛡️ 安全优先模式 + 低置信度 ({confidence:.2%} < {min_threshold:.2%})，提示用户授权联网")
             return {
                 "id": f"app-{app.id}-web-search-auth",
@@ -768,9 +777,9 @@ async def app_chat_completion(
             "match_confidence": round(match_confidence, 4),
             "suggested_questions": suggested_questions[:3],  # 最多3个建议
             "retrieval_sources": {
-                "fixed_qa": app.enable_fixed_qa and matched_fixed_qa,
-                "vector_kb": app.enable_vector_kb and retrieval_result.get("matched_source") == "kb",
-                "web_search": app.enable_web_search
+                "fixed_qa": context["app_config"]["enable_fixed_qa"] and matched_fixed_qa,
+                "vector_kb": context["app_config"]["enable_vector_kb"] and retrieval_result.get("matched_source") == "kb",
+                "web_search": context["app_config"]["enable_web_search"]
             },
             "timing": {
                 "retrieval_ms": round(retrieval_time, 2),
