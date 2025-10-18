@@ -20,7 +20,7 @@ aiofiles==23.2.1
 httpx==0.25.2
 
 # Monitoring
-loguru==0.7.2
+loguru==0.7.3
 
 # Document Processing (基础)
 PyMuPDF==1.23.8

@@ -47,7 +47,7 @@ httpx==0.25.2
 tenacity==8.2.3
 
 # Monitoring
-loguru==0.7.2
+loguru==0.7.3
 
 # Testing
 pytest==7.4.3
