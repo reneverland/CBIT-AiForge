@@ -2,7 +2,6 @@ import { useState, useEffect } from 'react'
 import {
   Boxes,
   Plus,
-  Settings as SettingsIcon,
   Play,
   Pause,
   Copy,
@@ -26,8 +25,7 @@ import {
   Upload,
   FileText,
   Sparkles,
-  Lightbulb,
-  TrendingUp
+  Lightbulb
 } from 'lucide-react'
 import axios from 'axios'
 
@@ -184,12 +182,12 @@ export default function ApplicationsPage() {
 
   // 模式徽章
   const getModeBadge = (mode: string) => {
-    const badges = {
+    const badges: Record<string, string> = {
       safe: 'bg-green-100 text-green-800',
       standard: 'bg-blue-100 text-blue-800',
       enhanced: 'bg-purple-100 text-purple-800'
     }
-    const labels = {
+    const labels: Record<string, string> = {
       safe: '🔒 安全模式',
       standard: '⚡ 标准模式',
       enhanced: '🌐 增强模式'
@@ -1155,11 +1153,6 @@ function CreateEditAppModal({ app, onClose, onSuccess }: CreateEditAppModalProps
 
 // ==================== Playground模态框（待实现完整版本） ====================
 
-interface PlaygroundModalProps {
-  app: Application
-  onClose: () => void
-}
-
 function PlaygroundModal({ app, onClose }: {
   app: Application
   onClose: () => void
@@ -1476,7 +1469,7 @@ function PlaygroundModal({ app, onClose }: {
                                     body: JSON.stringify({
                                       messages: [{ role: 'user', content: lastUserMsg.content }],
                                       temperature: app.temperature || 0.7,
-                                      max_tokens: app.max_tokens || 1000,
+                                      max_tokens: (app.full_config?.max_tokens || app.mode_config?.max_tokens || 2000),
                                       stream: false,
                                       force_web_search: true
                                     })
@@ -1750,7 +1743,7 @@ function PlaygroundModal({ app, onClose }: {
                                             body: JSON.stringify({
                                               messages: [{ role: 'user', content: lastUserMsg.content }],
                                               temperature: app.temperature || 0.7,
-                                              max_tokens: app.max_tokens || 1000,
+                                              max_tokens: (app.full_config?.max_tokens || app.mode_config?.max_tokens || 2000),
                                               stream: false,
                                               force_web_search: true  // 🔑 关键：强制启用联网搜索
                                             })
@@ -1888,19 +1881,19 @@ function PlaygroundModal({ app, onClose }: {
               <div>
                 <div className="text-blue-300">功能</div>
                 <div className="space-y-1 mt-1">
-                  {app.enable_fixed_qa && (
+                  {(app.full_config?.allow_ai_generation !== false) && (
                     <div className="flex items-center gap-2 text-green-300">
                       <CheckCircle2 className="w-4 h-4" />
                       固定Q&A
                     </div>
                   )}
-                  {app.enable_vector_kb && (
+                  {(app.full_config?.vector_kb_threshold !== undefined) && (
                     <div className="flex items-center gap-2 text-blue-300">
                       <CheckCircle2 className="w-4 h-4" />
                       向量检索
                     </div>
                   )}
-                  {app.enable_web_search && (
+                  {(app.full_config?.allow_web_search) && (
                     <div className="flex items-center gap-2 text-purple-300">
                       <CheckCircle2 className="w-4 h-4" />
                       联网搜索
