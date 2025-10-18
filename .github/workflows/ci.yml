@@ -174,17 +174,41 @@ jobs:
         run: |
           docker compose up -d
           echo "Waiting for services to start..."
-          sleep 90
+          sleep 60
       
       - name: Check backend health
         run: |
-          curl -f http://localhost:8000/health || exit 1
-          echo "Backend health check passed"
+          echo "Checking backend health..."
+          max_attempts=30
+          attempt=0
+          until curl -f http://localhost:8000/health 2>/dev/null; do
+            attempt=$((attempt + 1))
+            if [ $attempt -eq $max_attempts ]; then
+              echo "Backend health check failed after $max_attempts attempts"
+              docker compose logs backend
+              exit 1
+            fi
+            echo "Attempt $attempt/$max_attempts - waiting for backend..."
+            sleep 5
+          done
+          echo "✅ Backend health check passed"
       
       - name: Check frontend accessibility
         run: |
-          curl -f http://localhost:80 || exit 1
-          echo "Frontend accessibility check passed"
+          echo "Checking frontend accessibility..."
+          max_attempts=10
+          attempt=0
+          until curl -f http://localhost:80 2>/dev/null; do
+            attempt=$((attempt + 1))
+            if [ $attempt -eq $max_attempts ]; then
+              echo "Frontend accessibility check failed after $max_attempts attempts"
+              docker compose logs frontend
+              exit 1
+            fi
+            echo "Attempt $attempt/$max_attempts - waiting for frontend..."
+            sleep 3
+          done
+          echo "✅ Frontend accessibility check passed"
       
       - name: Check API documentation
         run: |
