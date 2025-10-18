@@ -24,7 +24,8 @@ python-magic==0.4.27
 # AI/ML
 torch==2.1.1
 transformers==4.36.0
-sentence-transformers==2.2.2
+sentence-transformers==2.7.0
+huggingface-hub>=0.20.0,<1.0.0
 accelerate==0.25.0
 bitsandbytes==0.41.3
 peft==0.7.1
