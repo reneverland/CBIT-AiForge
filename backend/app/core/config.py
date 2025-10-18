@@ -20,13 +20,14 @@ class Settings(BaseSettings):
     MODEL_CACHE_DIR: Path = Path("./app/data/models")
     HF_TOKEN: str = ""
     
-    # 数据存储路径（支持环境变量配置，方便迁移部署）
-    # 可通过.env文件或环境变量覆盖默认路径
-    DATA_DIR: Path = Path("./app/data")
-    CHROMA_DB_PATH: Path = Path("./app/data/chromadb")
-    SQLITE_DB_PATH: Path = Path("./app/data/forge.db")
-    UPLOAD_DIR: Path = Path("./app/data/uploads")
-    PROCESSED_DIR: Path = Path("./app/data/processed")
+    # 数据存储路径（使用绝对路径确保一致性）
+    # 基于当前文件位置计算项目根目录
+    _project_root: Path = Path(__file__).parent.parent.parent  # backend/app/core -> backend
+    DATA_DIR: Path = _project_root / "app" / "data"
+    CHROMA_DB_PATH: Path = _project_root / "app" / "data" / "chromadb"
+    SQLITE_DB_PATH: Path = _project_root / "app" / "data" / "forge.db"
+    UPLOAD_DIR: Path = _project_root / "app" / "data" / "uploads"
+    PROCESSED_DIR: Path = _project_root / "app" / "data" / "processed"
     
     # 服务配置
     API_HOST: str = "0.0.0.0"

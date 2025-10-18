@@ -12,7 +12,7 @@ from loguru import logger
 import secrets
 import string
 
-from app.models.database import get_db, Application, ApplicationKnowledgeBase, KnowledgeBase
+from app.models.database import get_db, Application, ApplicationKnowledgeBase, KnowledgeBase, FixedQAPair
 from app.core.mode_presets import (
     get_mode_config, 
     validate_mode, 
@@ -154,7 +154,7 @@ async def list_applications(
     
     return {
         "total": total,
-        "applications": [serialize_application(app) for app in applications]
+        "applications": [serialize_application(app, include_kb=True, db=db) for app in applications]
     }
 
 
@@ -302,24 +302,56 @@ async def update_application(
 
 @router.delete("/{app_id}")
 async def delete_application(app_id: int, db: Session = Depends(get_db)):
-    """删除应用"""
+    """删除应用（级联删除关联数据）"""
     db_app = db.query(Application).filter(Application.id == app_id).first()
     
     if not db_app:
         raise HTTPException(status_code=404, detail="应用不存在")
     
-    # 删除关联的知识库
+    app_name = db_app.name
+    
+    # 1. 删除关联的固定Q&A（级联删除）
+    qa_count = db.query(FixedQAPair).filter(
+        FixedQAPair.application_id == app_id
+    ).count()
+    
+    if qa_count > 0:
+        db.query(FixedQAPair).filter(
+            FixedQAPair.application_id == app_id
+        ).delete()
+        logger.info(f"🗑️  删除应用 [{app_name}] 的 {qa_count} 条固定Q&A")
+    
+    # 2. 删除关联的知识库关系
+    kb_count = db.query(ApplicationKnowledgeBase).filter(
+        ApplicationKnowledgeBase.application_id == app_id
+    ).count()
+    
     db.query(ApplicationKnowledgeBase).filter(
         ApplicationKnowledgeBase.application_id == app_id
     ).delete()
     
-    # 删除应用
+    if kb_count > 0:
+        logger.info(f"🗑️  删除应用 [{app_name}] 的 {kb_count} 个知识库关联")
+    
+    # 3. 删除检索日志（可选，保留历史记录）
+    # log_count = db.query(RetrievalLog).filter(
+    #     RetrievalLog.application_id == app_id
+    # ).count()
+    # db.query(RetrievalLog).filter(
+    #     RetrievalLog.application_id == app_id
+    # ).delete()
+    
+    # 4. 删除应用本身
     db.delete(db_app)
     db.commit()
     
-    logger.info(f"✅ 删除应用: {db_app.name}")
+    logger.info(f"✅ 删除应用: {app_name} (已清理关联数据)")
     
-    return {"message": "删除成功"}
+    return {
+        "message": "删除成功",
+        "deleted_qa_count": qa_count,
+        "deleted_kb_associations": kb_count
+    }
 
 
 @router.post("/{app_id}/knowledge-bases/{kb_id}")

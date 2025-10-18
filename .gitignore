@@ -4,100 +4,52 @@ __pycache__/
 *$py.class
 *.so
 .Python
-build/
-develop-eggs/
-dist/
-downloads/
-eggs/
-.eggs/
-lib/
-lib64/
-parts/
-sdist/
-var/
-wheels/
-*.egg-info/
-.installed.cfg
-*.egg
-MANIFEST
-
-# Virtual Environment
+env/
 venv/
 ENV/
-env/
-.venv
+build/
+dist/
+*.egg-info/
 
-# IDEs
-.vscode/
-.idea/
-*.swp
-*.swo
-*~
-.DS_Store
-
-# Logs
-*.log
-logs/
-backend/logs/
-backend_server.log
-frontend.log
-
-# Database
-*.db
-*.db-journal
-*.sqlite3
-backend/app/data/forge.db
+# 数据库和数据文件
+backend/app/data/forge.db*
 backend/app/data/chromadb/
-app/data/forge.db
-app/data/chromadb/
-
-# Uploads and processed files
 backend/app/data/uploads/
 backend/app/data/processed/
 backend/app/data/models/
-
-# API Configuration
 backend/app/data/api_config.json
+
+# 日志文件
+backend/logs/
+*.log
+frontend/frontend.log
 
 # Node.js
 node_modules/
 npm-debug.log*
 yarn-debug.log*
 yarn-error.log*
-.pnpm-debug.log*
 
-# Build outputs
-dist/
-dist-ssr/
-*.local
-
-# Environment variables
-.env
-.env.local
-.env.*.local
-
-# Testing
-coverage/
-.nyc_output/
-*.test.js.snap
-
-# Temporary files
-*.tmp
-*.temp
-.cache/
-backend.pid
-
-# OS
-Thumbs.db
-.DS_Store
-
-# Backup files
-*.bak
-*.backup
+# 编辑器
+.vscode/
+.idea/
+*.swp
+*.swo
 *~
 
-# Documentation (generated)
-docs/_build/
+# 系统文件
+.DS_Store
+Thumbs.db
 
-# Deployment
-docker-compose.override.yml
+# 环境变量
+.env
+.env.local
+
+# 临时文件
+tmp/
+temp/
+*.tmp
+
+# 构建产物
+frontend/dist/
+frontend/.vite/

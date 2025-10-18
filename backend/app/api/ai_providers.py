@@ -340,6 +340,85 @@ async def chat_completions(request: ChatRequest):
         raise HTTPException(status_code=500, detail=str(e))
 
 
+@router.get("/providers/{provider}/models")
+async def get_provider_models(provider: str, db: Session = Depends(get_db)):
+    """
+    获取指定提供商的可用模型列表
+    
+    Args:
+        provider: 提供商名称 (openai, anthropic, gemini等)
+    
+    Returns:
+        {
+            "has_config": bool,  # 是否已配置API密钥
+            "models": List[str],  # 可用模型列表
+            "provider": str
+        }
+    """
+    try:
+        # 从数据库查找该提供商的配置
+        provider_config = db.query(EmbeddingProvider).filter(
+            EmbeddingProvider.provider_type == provider,
+            EmbeddingProvider.api_key.isnot(None)
+        ).first()
+        
+        if not provider_config or not provider_config.api_key:
+            # 返回默认模型列表
+            default_models = _get_default_models(provider)
+            return {
+                "has_config": False,
+                "models": default_models,
+                "provider": provider,
+                "message": f"未配置 {provider} 的API密钥，显示默认模型列表"
+            }
+        
+        # 已配置，尝试从API获取真实模型列表
+        try:
+            multi_model_engine.set_api_key(provider, provider_config.api_key)
+            if provider_config.base_url:
+                multi_model_engine.set_custom_config(provider, {
+                    "base_url": provider_config.base_url
+                })
+            
+            # 获取缓存的模型列表
+            models = multi_model_engine.available_models.get(provider, [])
+            
+            # 如果没有缓存，从API获取
+            if not models:
+                logger.info(f"🔄 从 {provider} API 获取模型列表...")
+                verification = await multi_model_engine.verify_api_key(provider, provider_config.api_key)
+                if verification["valid"] and verification.get("models"):
+                    models = verification["models"]
+                    multi_model_engine.set_available_models(provider, models)
+                    logger.info(f"✅ 成功获取 {provider} 的 {len(models)} 个模型")
+                else:
+                    # API验证失败，返回默认模型
+                    models = _get_default_models(provider)
+                    logger.warning(f"⚠️ {provider} API验证失败，使用默认模型列表")
+            
+            return {
+                "has_config": True,
+                "models": models,
+                "provider": provider,
+                "message": f"已从 {provider} API 获取模型列表"
+            }
+            
+        except Exception as e:
+            logger.error(f"❌ 获取 {provider} 模型列表失败: {e}")
+            default_models = _get_default_models(provider)
+            return {
+                "has_config": True,
+                "models": default_models,
+                "provider": provider,
+                "error": str(e),
+                "message": f"获取失败，使用默认模型列表"
+            }
+    
+    except Exception as e:
+        logger.error(f"❌ 查询 {provider} 配置失败: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
 @router.get("/providers/models/available")
 async def get_available_models(db: Session = Depends(get_db)):
     """

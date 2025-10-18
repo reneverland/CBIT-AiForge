@@ -14,6 +14,8 @@ SAFE_MODE = {
     "enable_llm_polish": False,
     "enable_source_tracking": True,
     "enable_citation": True,
+    "web_search_domains": [],  # 不限制搜索域名
+    "search_channels": ["tavily", "google", "serper"],  # 搜索引擎通道
     "fallback_message": "抱歉，未找到准确答案。以下是相关问题推荐：",
     "max_tokens": 1500,
     "top_k": 5
@@ -32,8 +34,11 @@ STANDARD_MODE = {
     "enable_llm_polish": True,
     "enable_source_tracking": True,
     "enable_citation": True,
+    "web_search_domains": [],  # 不限制搜索域名
+    "search_channels": ["tavily", "google", "serper"],  # 搜索引擎通道
     "fallback_message": "根据知识库内容，我为您生成了以下答案：",
     "ai_generation_note": "【AI生成-建议核实】",
+    "web_search_note": "【含联网信息】",
     "max_tokens": 2000,
     "top_k": 5
 }
@@ -52,7 +57,7 @@ ENHANCED_MODE = {
     "enable_source_tracking": True,
     "enable_citation": True,
     "web_search_domains": [],  # 空列表表示不限制
-    "search_channels": ["official", "academic", "web"],
+    "search_channels": ["tavily", "google", "serper"],  # 搜索引擎优先级：Tavily > Google > Serper
     "fallback_message": "结合多个来源，我为您生成了以下答案：",
     "ai_generation_note": "【AI综合-建议核实】",
     "web_search_note": "【含联网信息】",

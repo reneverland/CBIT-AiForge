@@ -452,14 +452,16 @@ class HybridRetrievalEngine:
             vector_retrieval_config = fusion_config.get("vector_retrieval", {})
             
             # 获取检索参数，优先使用fusion_config中的配置
-            min_similarity_score = vector_retrieval_config.get("min_similarity_score", 
-                                                               app_config.get("similarity_threshold_low", 0.75))
+            # 🎯 优先级：vector_kb_threshold > fusion_config.min_similarity_score > similarity_threshold_low
+            min_similarity_score = app_config.get("vector_kb_threshold",
+                                                  vector_retrieval_config.get("min_similarity_score", 
+                                                                             app_config.get("similarity_threshold_low", 0.75)))
             max_results = vector_retrieval_config.get("max_results", 
                                                       app_config.get("top_k", 5))
             rerank_enabled = vector_retrieval_config.get("rerank_enabled", False)
             hybrid_search_enabled = vector_retrieval_config.get("hybrid_search_enabled", False)
             
-            logger.info(f"🔍 向量检索配置 - 最小相似度: {min_similarity_score}, 最大结果数: {max_results}, "
+            logger.info(f"🔍 向量检索配置 - 最小相似度: {min_similarity_score:.2%}, 最大结果数: {max_results}, "
                        f"重排序: {rerank_enabled}, 混合搜索: {hybrid_search_enabled}")
             
             for kb in knowledge_bases:

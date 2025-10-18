@@ -2,9 +2,9 @@
 数据库模型定义
 """
 
-from sqlalchemy import create_engine, Column, Integer, String, Text, DateTime, Boolean, Float, JSON
+from sqlalchemy import create_engine, Column, Integer, String, Text, DateTime, Boolean, Float, JSON, ForeignKey
 from sqlalchemy.ext.declarative import declarative_base
-from sqlalchemy.orm import sessionmaker
+from sqlalchemy.orm import sessionmaker, relationship
 from datetime import datetime
 from app.core.config import settings
 
@@ -195,6 +195,30 @@ class Application(Base):
         """获取模式配置（含默认值）"""
         from app.core.mode_presets import get_mode_config
         return get_mode_config(self.mode, self.mode_config)
+    
+    @property
+    def knowledge_bases(self):
+        """获取关联的知识库列表（通过ApplicationKnowledgeBase中间表）"""
+        from app.models.database import SessionLocal, ApplicationKnowledgeBase, KnowledgeBase
+        db = SessionLocal()
+        try:
+            # 查询关联关系
+            associations = db.query(ApplicationKnowledgeBase).filter(
+                ApplicationKnowledgeBase.application_id == self.id
+            ).all()
+            
+            if not associations:
+                return []
+            
+            # 获取知识库详情
+            kb_ids = [assoc.knowledge_base_id for assoc in associations]
+            knowledge_bases = db.query(KnowledgeBase).filter(
+                KnowledgeBase.id.in_(kb_ids)
+            ).all()
+            
+            return knowledge_bases
+        finally:
+            db.close()
 
 
 class ApplicationKnowledgeBase(Base):

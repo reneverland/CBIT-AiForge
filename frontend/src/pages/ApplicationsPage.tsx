@@ -22,7 +22,12 @@ import {
   ChevronDown,
   ChevronUp,
   Database,
-  MessageSquare
+  MessageSquare,
+  Upload,
+  FileText,
+  Sparkles,
+  Lightbulb,
+  TrendingUp
 } from 'lucide-react'
 import axios from 'axios'
 
@@ -285,7 +290,7 @@ export default function ApplicationsPage() {
 
       {/* Q&A管理器模态框 */}
       {qaManagerApp && (
-        <QAManagerModal
+        <FixedQAManagerModal
           app={qaManagerApp}
           onClose={() => setQaManagerApp(null)}
         />
@@ -549,13 +554,40 @@ function CreateEditAppModal({ app, onClose, onSuccess }: CreateEditAppModalProps
   const [llmModel, setLlmModel] = useState(app?.llm_model || 'gpt-4o')
   const [temperature, setTemperature] = useState(app?.temperature || 0.7)
   const [mode, setMode] = useState<'safe' | 'standard' | 'enhanced'>(app?.mode || 'standard')
+  const [systemPrompt, setSystemPrompt] = useState(
+    app?.mode_config?.system_prompt || app?.full_config?.system_prompt || ''
+  )
+  const [kbThreshold, setKbThreshold] = useState(
+    app?.mode_config?.vector_kb_threshold || app?.full_config?.vector_kb_threshold || 0.70
+  )
+  const [enableWebSearch, setEnableWebSearch] = useState(
+    app?.mode_config?.allow_web_search !== undefined 
+      ? app.mode_config.allow_web_search 
+      : app?.full_config?.allow_web_search || false
+  )
 
-  // 加载可用模式
+  // 加载可用模式和模型
   const [modes, setModes] = useState<ModesResponse['modes'] | null>(null)
+  const [availableModels, setAvailableModels] = useState<string[]>([])
+  const [loadingModels, setLoadingModels] = useState(false)
+  const [modelsFetchMessage, setModelsFetchMessage] = useState('')
+  
+  // 知识库相关
+  const [availableKnowledgeBases, setAvailableKnowledgeBases] = useState<any[]>([])
+  const [selectedKBIds, setSelectedKBIds] = useState<number[]>(
+    app?.knowledge_bases?.map((kb: any) => kb.id) || []
+  )
 
   useEffect(() => {
     loadModes()
+    loadModels(aiProvider) // 初始加载时获取默认提供商的模型
+    loadKnowledgeBases() // 加载知识库列表
   }, [])
+
+  // 当AI提供商改变时，重新加载模型列表
+  useEffect(() => {
+    loadModels(aiProvider)
+  }, [aiProvider])
 
   const loadModes = async () => {
     try {
@@ -566,6 +598,54 @@ function CreateEditAppModal({ app, onClose, onSuccess }: CreateEditAppModalProps
     }
   }
 
+  const loadModels = async (provider: string) => {
+    try {
+      setLoadingModels(true)
+      setModelsFetchMessage('正在获取模型列表...')
+      
+      const res = await axios.get(`${API_BASE}/api/ai-providers/providers/${provider}/models`)
+      
+      if (res.data.models && res.data.models.length > 0) {
+        setAvailableModels(res.data.models)
+        setModelsFetchMessage(res.data.has_config 
+          ? `✅ 已获取 ${res.data.models.length} 个可用模型` 
+          : `⚠️ 未配置API密钥，显示默认模型`)
+        
+        // 如果当前选择的模型不在列表中，选择第一个模型
+        if (!res.data.models.includes(llmModel)) {
+          setLlmModel(res.data.models[0])
+        }
+      } else {
+        setAvailableModels([])
+        setModelsFetchMessage('⚠️ 未找到可用模型')
+      }
+    } catch (error) {
+      console.error('加载模型列表失败:', error)
+      setAvailableModels([])
+      setModelsFetchMessage('❌ 获取模型列表失败')
+    } finally {
+      setLoadingModels(false)
+    }
+  }
+
+  const loadKnowledgeBases = async () => {
+    try {
+      const res = await axios.get(`${API_BASE}/api/knowledge-bases`)
+      setAvailableKnowledgeBases(res.data.knowledge_bases || [])
+    } catch (error) {
+      console.error('加载知识库列表失败:', error)
+      setAvailableKnowledgeBases([])
+    }
+  }
+
+  const toggleKBSelection = (kbId: number) => {
+    setSelectedKBIds(prev => 
+      prev.includes(kbId) 
+        ? prev.filter(id => id !== kbId)
+        : [...prev, kbId]
+    )
+  }
+
   const handleSubmit = async () => {
     if (!name.trim()) {
       alert('请输入应用名称')
@@ -574,17 +654,73 @@ function CreateEditAppModal({ app, onClose, onSuccess }: CreateEditAppModalProps
 
     try {
       setLoading(true)
-      const data = {
+      
+      // 构建mode_config（合并而不是替换）
+      const existingModeConfig = app?.mode_config || {}
+      const newModeConfig = {
+        ...existingModeConfig,
+        system_prompt: systemPrompt || null,
+        vector_kb_threshold: kbThreshold,
+        allow_web_search: enableWebSearch
+      }
+      
+      const data: any = {
         name,
         description,
         ai_provider: aiProvider,
         llm_model: llmModel,
         temperature,
-        mode
+        mode,
+        mode_config: newModeConfig
+      }
+
+      // 添加知识库关联（仅在创建时，编辑时需单独调用API）
+      if (!isEdit && selectedKBIds.length > 0) {
+        data.knowledge_bases = selectedKBIds.map(kbId => ({
+          knowledge_base_id: kbId,
+          priority: 1,
+          weight: 1.0,
+          boost_factor: 1.0
+        }))
       }
 
       if (isEdit) {
         await axios.put(`${API_BASE}/api/applications/${app.id}`, data)
+        
+        // 编辑模式下，需要单独处理知识库关联
+        // 获取当前关联的知识库
+        const currentKBIds = app.knowledge_bases?.map((kb: any) => kb.id) || []
+        
+        // 找出需要添加和删除的
+        const toAdd = selectedKBIds.filter(id => !currentKBIds.includes(id))
+        const toRemove = currentKBIds.filter((id: number) => !selectedKBIds.includes(id))
+        
+        // 只有在有变化时才执行操作
+        if (toAdd.length > 0 || toRemove.length > 0) {
+          // 添加新关联
+          for (const kbId of toAdd) {
+            try {
+              await axios.post(`${API_BASE}/api/applications/${app.id}/knowledge-bases/${kbId}`)
+            } catch (error: any) {
+              console.error(`添加知识库 ${kbId} 失败:`, error)
+              // 如果是"已关联"错误，忽略它
+              if (!error.response?.data?.detail?.includes('已关联')) {
+                throw error
+              }
+            }
+          }
+          
+          // 删除旧关联
+          for (const kbId of toRemove) {
+            try {
+              await axios.delete(`${API_BASE}/api/applications/${app.id}/knowledge-bases/${kbId}`)
+            } catch (error: any) {
+              console.error(`删除知识库 ${kbId} 失败:`, error)
+              // 继续执行，不要因为删除失败而中断
+            }
+          }
+        }
+        
         alert('更新成功')
       } else {
         await axios.post(`${API_BASE}/api/applications`, data)
@@ -779,28 +915,45 @@ function CreateEditAppModal({ app, onClose, onSuccess }: CreateEditAppModalProps
                   <select
                     value={aiProvider}
                     onChange={(e) => setAiProvider(e.target.value)}
-                    className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+                    className="w-full px-4 py-2 bg-white text-gray-900 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
                   >
-                    <option value="openai">OpenAI</option>
-                    <option value="anthropic">Anthropic</option>
-                    <option value="gemini">Google Gemini</option>
+                    <option value="openai" className="bg-white text-gray-900">OpenAI</option>
+                    <option value="anthropic" className="bg-white text-gray-900">Anthropic</option>
+                    <option value="gemini" className="bg-white text-gray-900">Google Gemini</option>
                   </select>
                 </div>
 
                 <div>
                   <label className="block text-sm font-medium text-gray-700 mb-2">
-                    LLM模型
+                    LLM模型 {loadingModels && <Loader2 className="inline w-4 h-4 ml-2 animate-spin text-blue-500" />}
                   </label>
                   <select
                     value={llmModel}
                     onChange={(e) => setLlmModel(e.target.value)}
-                    className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+                    disabled={loadingModels || availableModels.length === 0}
+                    className="w-full px-4 py-2 bg-white text-gray-900 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent disabled:opacity-50 disabled:cursor-not-allowed"
                   >
-                    <option value="gpt-4o">GPT-4o</option>
-                    <option value="gpt-4o-mini">GPT-4o-mini</option>
-                    <option value="claude-3-5-sonnet-20241022">Claude 3.5 Sonnet</option>
-                    <option value="gemini-1.5-pro">Gemini 1.5 Pro</option>
+                    {loadingModels ? (
+                      <option className="bg-white text-gray-900">正在加载模型...</option>
+                    ) : availableModels.length > 0 ? (
+                      availableModels.map((model) => (
+                        <option key={model} value={model} className="bg-white text-gray-900">
+                          {model}
+                        </option>
+                      ))
+                    ) : (
+                      <option className="bg-white text-gray-900">无可用模型</option>
+                    )}
                   </select>
+                  {modelsFetchMessage && (
+                    <p className={`text-xs mt-1 ${
+                      modelsFetchMessage.includes('✅') ? 'text-green-600' : 
+                      modelsFetchMessage.includes('⚠️') ? 'text-yellow-600' : 
+                      'text-red-600'
+                    }`}>
+                      {modelsFetchMessage}
+                    </p>
+                  )}
                 </div>
               </div>
 
@@ -822,12 +975,92 @@ function CreateEditAppModal({ app, onClose, onSuccess }: CreateEditAppModalProps
                   <span>更创造性</span>
                 </div>
               </div>
+
+              {/* 关联知识库 */}
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-2">
+                  关联知识库 <span className="text-xs text-gray-500">(可选)</span>
+                </label>
+                {availableKnowledgeBases.length > 0 ? (
+                  <div className="border border-gray-300 rounded-lg p-3 max-h-40 overflow-y-auto space-y-2">
+                    {availableKnowledgeBases.map((kb) => (
+                      <label
+                        key={kb.id}
+                        className="flex items-center space-x-2 p-2 hover:bg-gray-50 rounded cursor-pointer"
+                      >
+                        <input
+                          type="checkbox"
+                          checked={selectedKBIds.includes(kb.id)}
+                          onChange={() => toggleKBSelection(kb.id)}
+                          className="w-4 h-4 text-blue-600 rounded focus:ring-blue-500"
+                        />
+                        <span className="text-sm text-gray-900">{kb.name}</span>
+                        <span className="text-xs text-gray-500">({kb.collection_name})</span>
+                      </label>
+                    ))}
+                  </div>
+                ) : (
+                  <div className="border border-gray-300 rounded-lg p-4 text-center text-gray-500 text-sm">
+                    暂无可用知识库，请先在「知识库管理」中创建知识库
+                  </div>
+                )}
+                {selectedKBIds.length > 0 && (
+                  <p className="text-xs text-green-600 mt-1">
+                    ✅ 已选择 {selectedKBIds.length} 个知识库
+                  </p>
+                )}
+              </div>
+
+              {/* 系统提示词 */}
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-2">
+                  系统提示词 <span className="text-xs text-gray-500">(可选)</span>
+                </label>
+                <textarea
+                  value={systemPrompt}
+                  onChange={(e) => setSystemPrompt(e.target.value)}
+                  className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+                  rows={4}
+                  placeholder="例如：你是一个专业的客服助手，负责解答用户关于我们产品和服务的问题。请保持友好、专业的态度..."
+                />
+                <p className="text-xs text-gray-500 mt-1">
+                  💡 系统提示词用于定义AI助手的角色和行为方式。留空则使用默认提示词。
+                </p>
+              </div>
+
+              {/* 知识库检索阈值 */}
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-2">
+                  知识库检索阈值 <span className="text-xs text-gray-500">({(kbThreshold * 100).toFixed(0)}%)</span>
+                </label>
+                <div className="space-y-2">
+                  <input
+                    type="range"
+                    min="0.5"
+                    max="0.95"
+                    step="0.05"
+                    value={kbThreshold}
+                    onChange={(e) => setKbThreshold(parseFloat(e.target.value))}
+                    className="w-full h-2 bg-gray-200 rounded-lg appearance-none cursor-pointer"
+                  />
+                  <div className="flex justify-between text-xs text-gray-500">
+                    <span>50% (宽松)</span>
+                    <span>70% (推荐)</span>
+                    <span>95% (严格)</span>
+                  </div>
+                  <p className="text-xs text-gray-500">
+                    💡 相似度阈值越高，匹配越严格。建议值：60%-75%。
+                    {kbThreshold < 0.60 && <span className="text-orange-600"> ⚠️ 当前设置较宽松，可能返回不太相关的内容。</span>}
+                    {kbThreshold > 0.85 && <span className="text-orange-600"> ⚠️ 当前设置较严格，可能找不到相关内容。</span>}
+                  </p>
+                </div>
+              </div>
             </div>
           )}
 
           {step === 2 && modes && (
-            <div>
-              <div className="text-center mb-6">
+            <div className="space-y-6">
+              <div className="text-center">
                 <h3 className="text-xl font-bold text-gray-900 mb-2">选择工作模式</h3>
                 <p className="text-gray-600">不同模式适用于不同的使用场景</p>
               </div>
@@ -835,6 +1068,45 @@ function CreateEditAppModal({ app, onClose, onSuccess }: CreateEditAppModalProps
                 {getModeCard('safe', modes.safe)}
                 {getModeCard('standard', modes.standard)}
                 {getModeCard('enhanced', modes.enhanced)}
+              </div>
+
+              {/* 独立联网搜索开关 */}
+              <div className="border-t border-gray-200 pt-6">
+                <div className="bg-gradient-to-r from-blue-50 to-cyan-50 rounded-xl p-6 border border-blue-100">
+                  <div className="flex items-start space-x-4">
+                    <div className="flex-shrink-0 mt-1">
+                      <div className={`w-12 h-12 rounded-lg flex items-center justify-center ${
+                        enableWebSearch ? 'bg-blue-600' : 'bg-gray-400'
+                      }`}>
+                        <Globe className="w-6 h-6 text-white" />
+                      </div>
+                    </div>
+                    <div className="flex-1">
+                      <div className="flex items-center justify-between mb-2">
+                        <h4 className="text-lg font-semibold text-gray-900">🌐 联网搜索</h4>
+                        <label className="relative inline-flex items-center cursor-pointer">
+                          <input
+                            type="checkbox"
+                            checked={enableWebSearch}
+                            onChange={(e) => setEnableWebSearch(e.target.checked)}
+                            className="sr-only peer"
+                          />
+                          <div className="w-11 h-6 bg-gray-300 peer-focus:outline-none peer-focus:ring-4 peer-focus:ring-blue-300 rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-blue-600"></div>
+                        </label>
+                      </div>
+                      <p className="text-sm text-gray-700 mb-2">
+                        {enableWebSearch 
+                          ? '✅ 已启用 - 系统可联网获取实时信息，但需人工核实准确性' 
+                          : '❌ 已禁用 - 仅使用知识库和固定Q&A，响应更快更准确'
+                        }
+                      </p>
+                      <div className="flex items-center space-x-2 text-xs text-gray-600">
+                        <span>💡 提示:</span>
+                        <span>此设置独立于模式，您可以在任何模式下开启或关闭联网搜索</span>
+                      </div>
+                    </div>
+                  </div>
+                </div>
               </div>
             </div>
           )}
@@ -2022,7 +2294,16 @@ function FixedQAManagerModal({ app, onClose }: {
             </div>
             <div className="flex items-center gap-2">
               <button
-                onClick={() => setShowAddForm(true)}
+                onClick={() => {
+                  console.log('🔘 点击添加Q&A按钮')
+                  try {
+                    setShowAddForm(true)
+                    console.log('✅ showAddForm已设置为true')
+                  } catch (error) {
+                    console.error('❌ 设置showAddForm失败:', error)
+                    alert('打开表单失败，请查看控制台错误信息')
+                  }
+                }}
                 className="px-4 py-2 bg-green-500 text-white rounded-lg hover:bg-green-600 transition-colors flex items-center gap-2"
               >
                 <Plus className="w-5 h-5" />
@@ -2336,29 +2617,45 @@ function FixedQAManagerModal({ app, onClose }: {
         {showAddForm && (
           <div className="absolute inset-0 bg-black/50 flex items-center justify-center p-4" style={{ zIndex: 10000 }}>
             <div className="bg-slate-800 rounded-xl border border-white/10 p-6 w-full max-w-4xl max-h-[90vh] overflow-y-auto">
-              <h3 className="text-xl font-bold text-white mb-4">添加新Q&A</h3>
+              <div className="flex items-center justify-between mb-4">
+                <h3 className="text-xl font-bold text-white">添加新Q&A</h3>
+                <button
+                  onClick={() => {
+                    setShowAddForm(false)
+                    setAddMode('manual')
+                    setUploadedFile(null)
+                    setGeneratedQAs([])
+                  }}
+                  className="p-2 hover:bg-white/10 rounded-lg transition-colors"
+                  title="关闭"
+                >
+                  <X className="w-5 h-5 text-gray-400" />
+                </button>
+              </div>
               
               {/* 选项卡 */}
               <div className="flex gap-2 mb-6 border-b border-white/10">
                 <button
                   onClick={() => setAddMode('manual')}
-                  className={`px-4 py-2 font-medium transition-colors ${
+                  className={`px-4 py-2 font-medium transition-colors flex items-center gap-2 ${
                     addMode === 'manual'
                       ? 'text-green-400 border-b-2 border-green-400'
                       : 'text-blue-300 hover:text-white'
                   }`}
                 >
+                  <Edit className="w-4 h-4" />
                   手动输入
                 </button>
                 <button
                   onClick={() => setAddMode('file')}
-                  className={`px-4 py-2 font-medium transition-colors ${
+                  className={`px-4 py-2 font-medium transition-colors flex items-center gap-2 ${
                     addMode === 'file'
                       ? 'text-green-400 border-b-2 border-green-400'
                       : 'text-blue-300 hover:text-white'
                   }`}
                 >
-                  CBIT-Training Model生成（文件上传）
+                  <Upload className="w-4 h-4" />
+                  文件上传（批量导入/AI生成）
                 </button>
               </div>
 
@@ -2438,11 +2735,27 @@ function FixedQAManagerModal({ app, onClose }: {
                   {generatedQAs.length === 0 ? (
                     // 上传和生成阶段
                     <>
-                      <div className="border-2 border-dashed border-white/20 rounded-xl p-8 text-center">
+                      {/* 🆕 说明卡片 */}
+                      <div className="bg-blue-500/10 border border-blue-400/30 rounded-lg p-4 mb-4">
+                        <h4 className="text-blue-300 font-medium mb-2 flex items-center gap-2">
+                          <Lightbulb className="w-4 h-4" />
+                          支持两种方式：
+                        </h4>
+                        <ul className="text-sm text-blue-200/80 space-y-1.5 ml-6">
+                          <li className="list-disc">
+                            <strong>方式1：结构化格式</strong> - 上传 <code className="px-1.5 py-0.5 bg-white/10 rounded text-xs">问题::答案</code> 格式的文件，自动解析
+                          </li>
+                          <li className="list-disc">
+                            <strong>方式2：AI智能提取</strong> - 上传任意文档，AI自动从内容中生成Q&A（需配置OpenAI API）
+                          </li>
+                        </ul>
+                      </div>
+
+                      <div className="border-2 border-dashed border-white/20 rounded-xl p-8 text-center hover:border-blue-400/50 transition-colors">
                         <Upload className="w-12 h-12 mx-auto mb-4 text-blue-400" />
-                        <p className="text-white mb-2">上传文档，AI自动生成Q&A</p>
+                        <p className="text-white text-lg font-medium mb-2">上传文档</p>
                         <p className="text-sm text-blue-300/70 mb-4">
-                          支持 TXT、DOCX、PDF 格式 • 文件大小不超过10MB
+                          支持 TXT、DOCX、PDF 格式 • 最大10MB
                         </p>
                         <input
                           type="file"
@@ -2453,9 +2766,12 @@ function FixedQAManagerModal({ app, onClose }: {
                         />
                         <label
                           htmlFor="file-upload"
-                          className="inline-block px-6 py-3 bg-blue-500 text-white rounded-lg cursor-pointer hover:bg-blue-600 transition-colors"
+                          className="inline-block px-6 py-3 bg-gradient-to-r from-blue-500 to-blue-600 text-white rounded-lg cursor-pointer hover:from-blue-600 hover:to-blue-700 transition-all shadow-lg hover:shadow-xl"
                         >
-                          选择文件
+                          <span className="flex items-center gap-2">
+                            <Upload className="w-5 h-5" />
+                            选择文件
+                          </span>
                         </label>
                       </div>
 
@@ -2482,23 +2798,27 @@ function FixedQAManagerModal({ app, onClose }: {
                           <button
                             onClick={handleGenerateFromFile}
                             disabled={generatingFromFile}
-                            className="w-full mt-4 px-6 py-3 bg-gradient-to-r from-purple-500 to-pink-500 text-white rounded-xl hover:shadow-lg transition-all disabled:opacity-50 flex items-center justify-center gap-2"
+                            className="w-full mt-4 px-6 py-4 bg-gradient-to-r from-purple-500 via-pink-500 to-purple-600 text-white rounded-xl hover:shadow-2xl transition-all disabled:opacity-50 flex items-center justify-center gap-2 font-medium text-lg"
                           >
                             {generatingFromFile ? (
                               <>
-                                <Loader2 className="w-5 h-5 animate-spin" />
-                                AI正在生成Q&A...
+                                <Loader2 className="w-6 h-6 animate-spin" />
+                                <span>AI正在分析文档...</span>
                               </>
                             ) : (
                               <>
-                                <Sparkles className="w-5 h-5" />
-                                CBIT-Training Model生成Q&A
+                                <Sparkles className="w-6 h-6" />
+                                <span>开始处理文档</span>
                               </>
                             )}
                           </button>
-                          <p className="text-xs text-blue-300/70 mt-2 text-center">
-                            使用 {app.ai_provider}/{app.llm_model} 模型生成
-                          </p>
+                          <div className="mt-3 p-3 bg-purple-500/10 border border-purple-400/30 rounded-lg">
+                            <p className="text-xs text-purple-200/90 text-center">
+                              💡 系统会自动识别文件格式：<br/>
+                              • 如果是 <code className="px-1 py-0.5 bg-white/10 rounded">问题::答案</code> 格式，直接解析<br/>
+                              • 如果是普通文档，使用 <strong>{app.ai_provider}/{app.llm_model}</strong> 智能提取
+                            </p>
+                          </div>
                         </div>
                       )}
                     </>
