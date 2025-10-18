@@ -3,10 +3,13 @@
 根据不同模式（safe/standard/enhanced）执行不同的推理策略
 """
 
-from typing import Dict, List, Tuple, Optional, Any
+from typing import Dict, List, Tuple, Optional, Any, TYPE_CHECKING
 from loguru import logger
 from app.core.mode_presets import get_mode_config, MODE_PRESETS
 import asyncio
+
+if TYPE_CHECKING:
+    from app.models.database import Application
 
 
 class ModeHandler:
