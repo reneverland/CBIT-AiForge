@@ -107,10 +107,17 @@ async def global_exception_handler(request: Request, exc: Exception):
     )
 
 
-# 健康检查
+# 健康检查（Docker用）
+@app.get("/health")
+async def health_check_root():
+    """健康检查端点（Docker容器用）"""
+    return {"status": "ok"}
+
+
+# 健康检查（详细信息）
 @app.get("/api/health", tags=["系统"])
 async def health_check():
-    """健康检查端点"""
+    """健康检查端点（详细信息）"""
     return {
         "status": "healthy",
         "service": "cbitXForge",
