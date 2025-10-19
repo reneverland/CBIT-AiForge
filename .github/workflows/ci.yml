@@ -130,8 +130,13 @@ jobs:
       
       - name: Test docker-compose configuration
         run: |
+          echo "Testing production docker-compose.yml..."
           docker compose config
-          echo "Docker Compose configuration is valid"
+          echo "✅ Production configuration is valid"
+          echo ""
+          echo "Testing CI docker-compose.ci.yml..."
+          docker compose -f docker-compose.ci.yml config
+          echo "✅ CI configuration is valid"
 
   security-scan:
     name: Security Scan
@@ -172,7 +177,7 @@ jobs:
       
       - name: Start services with docker-compose
         run: |
-          docker compose up -d
+          docker compose -f docker-compose.ci.yml up -d
           echo "Waiting for services to start..."
           sleep 60
       
@@ -185,7 +190,7 @@ jobs:
             attempt=$((attempt + 1))
             if [ $attempt -eq $max_attempts ]; then
               echo "Backend health check failed after $max_attempts attempts"
-              docker compose logs backend
+              docker compose -f docker-compose.ci.yml logs backend
               exit 1
             fi
             echo "Attempt $attempt/$max_attempts - waiting for backend..."
@@ -202,7 +207,7 @@ jobs:
             attempt=$((attempt + 1))
             if [ $attempt -eq $max_attempts ]; then
               echo "Frontend accessibility check failed after $max_attempts attempts"
-              docker compose logs frontend
+              docker compose -f docker-compose.ci.yml logs frontend
               exit 1
             fi
             echo "Attempt $attempt/$max_attempts - waiting for frontend..."
@@ -218,12 +223,12 @@ jobs:
       - name: View container logs
         if: always()
         run: |
-          docker compose logs backend
-          docker compose logs frontend
+          docker compose -f docker-compose.ci.yml logs backend
+          docker compose -f docker-compose.ci.yml logs frontend
       
       - name: Stop services
         if: always()
-        run: docker compose down -v
+        run: docker compose -f docker-compose.ci.yml down -v
 
   build-status:
     name: Build Status Report
