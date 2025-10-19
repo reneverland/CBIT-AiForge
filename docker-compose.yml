@@ -5,23 +5,23 @@ services:
       dockerfile: Dockerfile.backend
     container_name: cbit_aiforge_backend
     ports:
-      - "8000:8000"
+      - "9200:8000"  # 外部9200端口映射到容器内8000端口
     volumes:
-      # 持久化数据存储
-      - aiforge_data:/app/app/data
-      - aiforge_logs:/app/logs
+      # 使用绑定挂载确保配置文件可访问
+      - ./backend/app/data:/app/app/data
+      - ./logs:/app/logs
     environment:
       - USE_GPU=false
       - DEBUG=false
       - API_HOST=0.0.0.0
-      - API_PORT=8000
+      - API_PORT=8000  # 容器内部端口保持8000
     restart: unless-stopped
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
       interval: 30s
       timeout: 10s
-      retries: 3
-      start_period: 40s
+      retries: 5
+      start_period: 60s
     networks:
       - aiforge_network
 
@@ -31,24 +31,20 @@ services:
       dockerfile: Dockerfile.frontend
     container_name: cbit_aiforge_frontend
     ports:
-      - "80:80"
+      - "9300:80"  # 外部9300端口映射到容器内80端口
     depends_on:
-      - backend
+      backend:
+        condition: service_healthy
     restart: unless-stopped
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost/"]
       interval: 30s
       timeout: 10s
       retries: 3
+      start_period: 30s
     networks:
       - aiforge_network
 
 networks:
   aiforge_network:
     driver: bridge
-
-volumes:
-  aiforge_data:
-    driver: local
-  aiforge_logs:
-    driver: local
