@@ -2,7 +2,6 @@ import { useState, useEffect } from 'react'
 import {
   Boxes,
   Plus,
-  Settings as SettingsIcon,
   Play,
   Pause,
   Copy,
@@ -22,11 +21,35 @@ import {
   ChevronDown,
   ChevronUp,
   Database,
-  MessageSquare
+  MessageSquare,
+  Upload,
+  FileText,
+  Sparkles,
+  Lightbulb,
+  GripVertical,
+  HelpCircle
 } from 'lucide-react'
 import axios from 'axios'
+import PresetQuestionsModal from '../components/PresetQuestionsModal'
+import {
+  DndContext,
+  closestCenter,
+  KeyboardSensor,
+  PointerSensor,
+  useSensor,
+  useSensors,
+  DragEndEvent,
+} from '@dnd-kit/core'
+import {
+  arrayMove,
+  SortableContext,
+  sortableKeyboardCoordinates,
+  useSortable,
+  verticalListSortingStrategy,
+} from '@dnd-kit/sortable'
+import { CSS } from '@dnd-kit/utilities'
 
-const API_BASE = 'http://localhost:5003'
+const API_BASE = import.meta.env.VITE_API_BASE_URL ?? ''
 
 // ==================== 类型定义 ====================
 
@@ -109,6 +132,7 @@ export default function ApplicationsPage() {
   const [editingApp, setEditingApp] = useState<Application | null>(null)
   const [playgroundApp, setPlaygroundApp] = useState<Application | null>(null)
   const [qaManagerApp, setQaManagerApp] = useState<Application | null>(null)
+  const [presetQuestionsApp, setPresetQuestionsApp] = useState<Application | null>(null)
 
   useEffect(() => {
     loadApplications()
@@ -252,6 +276,7 @@ export default function ApplicationsPage() {
               onTest={() => setPlaygroundApp(app)}
               onDelete={handleDelete}
               onManageQA={() => setQaManagerApp(app)}
+              onManagePresetQuestions={() => setPresetQuestionsApp(app)}
               getModeIcon={getModeIcon}
               getModeBadge={getModeBadge}
             />
@@ -285,9 +310,18 @@ export default function ApplicationsPage() {
 
       {/* Q&A管理器模态框 */}
       {qaManagerApp && (
-        <QAManagerModal
+        <FixedQAManagerModal
           app={qaManagerApp}
           onClose={() => setQaManagerApp(null)}
+        />
+      )}
+
+      {/* 预设问题管理模态框 */}
+      {presetQuestionsApp && (
+        <PresetQuestionsModal
+          appId={presetQuestionsApp.id}
+          appName={presetQuestionsApp.name}
+          onClose={() => setPresetQuestionsApp(null)}
         />
       )}
     </div>
@@ -305,6 +339,7 @@ interface ApplicationCardProps {
   onTest: () => void
   onDelete: (id: number, name: string) => void
   onManageQA: () => void
+  onManagePresetQuestions: () => void
   getModeIcon: (mode: string) => JSX.Element
   getModeBadge: (mode: string) => JSX.Element
 }
@@ -318,6 +353,7 @@ function ApplicationCard({
   onTest,
   onDelete,
   onManageQA,
+  onManagePresetQuestions,
   getModeIcon,
   getModeBadge
 }: ApplicationCardProps) {
@@ -376,6 +412,13 @@ function ApplicationCard({
               title="管理固定Q&A"
             >
               <MessageSquare className="w-5 h-5 text-purple-600" />
+            </button>
+            <button
+              onClick={onManagePresetQuestions}
+              className="p-2 hover:bg-green-50 rounded-lg transition-colors"
+              title="常见问题"
+            >
+              <HelpCircle className="w-5 h-5 text-green-600" />
             </button>
             <button
               onClick={onEdit}
@@ -549,13 +592,52 @@ function CreateEditAppModal({ app, onClose, onSuccess }: CreateEditAppModalProps
   const [llmModel, setLlmModel] = useState(app?.llm_model || 'gpt-4o')
   const [temperature, setTemperature] = useState(app?.temperature || 0.7)
   const [mode, setMode] = useState<'safe' | 'standard' | 'enhanced'>(app?.mode || 'standard')
+  const [systemPrompt, setSystemPrompt] = useState(
+    app?.mode_config?.system_prompt || app?.full_config?.system_prompt || ''
+  )
+  const [kbThreshold, setKbThreshold] = useState(
+    app?.mode_config?.vector_kb_threshold || app?.full_config?.vector_kb_threshold || 0.70
+  )
+  const [topK, setTopK] = useState(
+    app?.mode_config?.top_k || app?.full_config?.top_k || 10
+  )
+  // QA阈值配置
+  const [qaDirectThreshold, setQaDirectThreshold] = useState(
+    app?.mode_config?.fusion_config?.strategy?.qa_direct_threshold || 
+    app?.full_config?.fusion_config?.strategy?.qa_direct_threshold || 0.85
+  )
+  const [qaSuggestThreshold, setQaSuggestThreshold] = useState(
+    app?.mode_config?.fusion_config?.strategy?.qa_suggest_threshold || 
+    app?.full_config?.fusion_config?.strategy?.qa_suggest_threshold || 0.55
+  )
+  const [enableWebSearch, setEnableWebSearch] = useState(
+    app?.mode_config?.allow_web_search !== undefined 
+      ? app.mode_config.allow_web_search 
+      : app?.full_config?.allow_web_search || false
+  )
 
-  // 加载可用模式
+  // 加载可用模式和模型
   const [modes, setModes] = useState<ModesResponse['modes'] | null>(null)
+  const [availableModels, setAvailableModels] = useState<string[]>([])
+  const [loadingModels, setLoadingModels] = useState(false)
+  const [modelsFetchMessage, setModelsFetchMessage] = useState('')
+  
+  // 知识库相关
+  const [availableKnowledgeBases, setAvailableKnowledgeBases] = useState<any[]>([])
+  const [selectedKBIds, setSelectedKBIds] = useState<number[]>(
+    app?.knowledge_bases?.map((kb: any) => kb.id) || []
+  )
 
   useEffect(() => {
     loadModes()
+    loadModels(aiProvider) // 初始加载时获取默认提供商的模型
+    loadKnowledgeBases() // 加载知识库列表
   }, [])
+
+  // 当AI提供商改变时，重新加载模型列表
+  useEffect(() => {
+    loadModels(aiProvider)
+  }, [aiProvider])
 
   const loadModes = async () => {
     try {
@@ -566,6 +648,54 @@ function CreateEditAppModal({ app, onClose, onSuccess }: CreateEditAppModalProps
     }
   }
 
+  const loadModels = async (provider: string) => {
+    try {
+      setLoadingModels(true)
+      setModelsFetchMessage('正在获取模型列表...')
+      
+      const res = await axios.get(`${API_BASE}/api/ai-providers/providers/${provider}/models`)
+      
+      if (res.data.models && res.data.models.length > 0) {
+        setAvailableModels(res.data.models)
+        setModelsFetchMessage(res.data.has_config 
+          ? `✅ 已获取 ${res.data.models.length} 个可用模型` 
+          : `⚠️ 未配置API密钥，显示默认模型`)
+        
+        // 如果当前选择的模型不在列表中，选择第一个模型
+        if (!res.data.models.includes(llmModel)) {
+          setLlmModel(res.data.models[0])
+        }
+      } else {
+        setAvailableModels([])
+        setModelsFetchMessage('⚠️ 未找到可用模型')
+      }
+    } catch (error) {
+      console.error('加载模型列表失败:', error)
+      setAvailableModels([])
+      setModelsFetchMessage('❌ 获取模型列表失败')
+    } finally {
+      setLoadingModels(false)
+    }
+  }
+
+  const loadKnowledgeBases = async () => {
+    try {
+      const res = await axios.get(`${API_BASE}/api/knowledge-bases`)
+      setAvailableKnowledgeBases(res.data.knowledge_bases || [])
+    } catch (error) {
+      console.error('加载知识库列表失败:', error)
+      setAvailableKnowledgeBases([])
+    }
+  }
+
+  const toggleKBSelection = (kbId: number) => {
+    setSelectedKBIds(prev => 
+      prev.includes(kbId) 
+        ? prev.filter(id => id !== kbId)
+        : [...prev, kbId]
+    )
+  }
+
   const handleSubmit = async () => {
     if (!name.trim()) {
       alert('请输入应用名称')
@@ -574,17 +704,86 @@ function CreateEditAppModal({ app, onClose, onSuccess }: CreateEditAppModalProps
 
     try {
       setLoading(true)
-      const data = {
+      
+      // 构建mode_config（合并而不是替换）
+      const existingModeConfig = app?.mode_config || {}
+      const existingFusionConfig = existingModeConfig.fusion_config || {}
+      const existingStrategy = existingFusionConfig.strategy || {}
+      
+      const newModeConfig = {
+        ...existingModeConfig,
+        system_prompt: systemPrompt || null,
+        vector_kb_threshold: kbThreshold,
+        top_k: topK,
+        allow_web_search: enableWebSearch,
+        // QA阈值配置
+        fusion_config: {
+          ...existingFusionConfig,
+          strategy: {
+            ...existingStrategy,
+            qa_direct_threshold: qaDirectThreshold,
+            qa_suggest_threshold: qaSuggestThreshold
+          }
+        }
+      }
+      
+      const data: any = {
         name,
         description,
         ai_provider: aiProvider,
         llm_model: llmModel,
         temperature,
-        mode
+        mode,
+        mode_config: newModeConfig
+      }
+
+      // 添加知识库关联（仅在创建时，编辑时需单独调用API）
+      if (!isEdit && selectedKBIds.length > 0) {
+        data.knowledge_bases = selectedKBIds.map(kbId => ({
+          knowledge_base_id: kbId,
+          priority: 1,
+          weight: 1.0,
+          boost_factor: 1.0
+        }))
       }
 
       if (isEdit) {
         await axios.put(`${API_BASE}/api/applications/${app.id}`, data)
+        
+        // 编辑模式下，需要单独处理知识库关联
+        // 获取当前关联的知识库
+        const currentKBIds = app.knowledge_bases?.map((kb: any) => kb.id) || []
+        
+        // 找出需要添加和删除的
+        const toAdd = selectedKBIds.filter(id => !currentKBIds.includes(id))
+        const toRemove = currentKBIds.filter((id: number) => !selectedKBIds.includes(id))
+        
+        // 只有在有变化时才执行操作
+        if (toAdd.length > 0 || toRemove.length > 0) {
+          // 添加新关联
+          for (const kbId of toAdd) {
+            try {
+              await axios.post(`${API_BASE}/api/applications/${app.id}/knowledge-bases/${kbId}`)
+            } catch (error: any) {
+              console.error(`添加知识库 ${kbId} 失败:`, error)
+              // 如果是"已关联"错误，忽略它
+              if (!error.response?.data?.detail?.includes('已关联')) {
+                throw error
+              }
+            }
+          }
+          
+          // 删除旧关联
+          for (const kbId of toRemove) {
+            try {
+              await axios.delete(`${API_BASE}/api/applications/${app.id}/knowledge-bases/${kbId}`)
+            } catch (error: any) {
+              console.error(`删除知识库 ${kbId} 失败:`, error)
+              // 继续执行，不要因为删除失败而中断
+            }
+          }
+        }
+        
         alert('更新成功')
       } else {
         await axios.post(`${API_BASE}/api/applications`, data)
@@ -779,28 +978,58 @@ function CreateEditAppModal({ app, onClose, onSuccess }: CreateEditAppModalProps
                   <select
                     value={aiProvider}
                     onChange={(e) => setAiProvider(e.target.value)}
-                    className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+                    className="w-full px-4 py-2 bg-white text-gray-900 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
                   >
-                    <option value="openai">OpenAI</option>
-                    <option value="anthropic">Anthropic</option>
-                    <option value="gemini">Google Gemini</option>
+                    <option value="openai" className="bg-white text-gray-900">OpenAI</option>
+                    <option value="anthropic" className="bg-white text-gray-900">Anthropic</option>
+                    <option value="gemini" className="bg-white text-gray-900">Google Gemini</option>
+                    <option value="ollama" className="bg-white text-gray-900">Ollama (本地)</option>
                   </select>
                 </div>
 
                 <div>
                   <label className="block text-sm font-medium text-gray-700 mb-2">
-                    LLM模型
+                    LLM模型 {loadingModels && <Loader2 className="inline w-4 h-4 ml-2 animate-spin text-blue-500" />}
                   </label>
                   <select
                     value={llmModel}
                     onChange={(e) => setLlmModel(e.target.value)}
-                    className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+                    disabled={loadingModels || availableModels.length === 0}
+                    className="w-full px-4 py-2 bg-white text-gray-900 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent disabled:opacity-50 disabled:cursor-not-allowed"
                   >
-                    <option value="gpt-4o">GPT-4o</option>
-                    <option value="gpt-4o-mini">GPT-4o-mini</option>
-                    <option value="claude-3-5-sonnet-20241022">Claude 3.5 Sonnet</option>
-                    <option value="gemini-1.5-pro">Gemini 1.5 Pro</option>
+                    {loadingModels ? (
+                      <option className="bg-white text-gray-900">正在加载模型...</option>
+                    ) : availableModels.length > 0 ? (
+                      availableModels.map((model) => (
+                        <option key={model} value={model} className="bg-white text-gray-900">
+                          {model}
+                        </option>
+                      ))
+                    ) : (
+                      <option className="bg-white text-gray-900">无可用模型</option>
+                    )}
                   </select>
+                  {modelsFetchMessage && (
+                    <p className={`text-xs mt-1 ${
+                      modelsFetchMessage.includes('✅') ? 'text-green-600' : 
+                      modelsFetchMessage.includes('⚠️') ? 'text-yellow-600' : 
+                      'text-red-600'
+                    }`}>
+                      {modelsFetchMessage}
+                    </p>
+                  )}
+                  
+                  {/* Ollama 刷新按钮 */}
+                  {aiProvider === 'ollama' && (
+                    <button
+                      onClick={() => loadModels('ollama')}
+                      disabled={loadingModels}
+                      className="mt-2 w-full flex items-center justify-center gap-2 px-3 py-2 bg-blue-50 text-blue-600 rounded-lg hover:bg-blue-100 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+                    >
+                      <RefreshCw className={`w-4 h-4 ${loadingModels ? 'animate-spin' : ''}`} />
+                      <span className="text-sm">{loadingModels ? '刷新中...' : '刷新Ollama模型'}</span>
+                    </button>
+                  )}
                 </div>
               </div>
 
@@ -822,12 +1051,177 @@ function CreateEditAppModal({ app, onClose, onSuccess }: CreateEditAppModalProps
                   <span>更创造性</span>
                 </div>
               </div>
+
+              {/* 关联知识库 */}
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-2">
+                  关联知识库 <span className="text-xs text-gray-500">(可选)</span>
+                </label>
+                {availableKnowledgeBases.length > 0 ? (
+                  <div className="border border-gray-300 rounded-lg p-3 max-h-40 overflow-y-auto space-y-2">
+                    {availableKnowledgeBases.map((kb) => (
+                      <label
+                        key={kb.id}
+                        className="flex items-center space-x-2 p-2 hover:bg-gray-50 rounded cursor-pointer"
+                      >
+                        <input
+                          type="checkbox"
+                          checked={selectedKBIds.includes(kb.id)}
+                          onChange={() => toggleKBSelection(kb.id)}
+                          className="w-4 h-4 text-blue-600 rounded focus:ring-blue-500"
+                        />
+                        <span className="text-sm text-gray-900">{kb.name}</span>
+                        <span className="text-xs text-gray-500">({kb.collection_name})</span>
+                      </label>
+                    ))}
+                  </div>
+                ) : (
+                  <div className="border border-gray-300 rounded-lg p-4 text-center text-gray-500 text-sm">
+                    暂无可用知识库，请先在「知识库管理」中创建知识库
+                  </div>
+                )}
+                {selectedKBIds.length > 0 && (
+                  <p className="text-xs text-green-600 mt-1">
+                    ✅ 已选择 {selectedKBIds.length} 个知识库
+                  </p>
+                )}
+              </div>
+
+              {/* 系统提示词 */}
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-2">
+                  系统提示词 <span className="text-xs text-gray-500">(可选)</span>
+                </label>
+                <textarea
+                  value={systemPrompt}
+                  onChange={(e) => setSystemPrompt(e.target.value)}
+                  className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+                  rows={4}
+                  placeholder="例如：你是一个专业的客服助手，负责解答用户关于我们产品和服务的问题。请保持友好、专业的态度..."
+                />
+                <p className="text-xs text-gray-500 mt-1">
+                  💡 系统提示词用于定义AI助手的角色和行为方式。留空则使用默认提示词。
+                </p>
+              </div>
+
+              {/* 知识库检索阈值 */}
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-2">
+                  知识库检索阈值 <span className="text-xs text-gray-500">({(kbThreshold * 100).toFixed(0)}%)</span>
+                </label>
+                <div className="space-y-2">
+                  <input
+                    type="range"
+                    min="0.2"
+                    max="0.95"
+                    step="0.05"
+                    value={kbThreshold}
+                    onChange={(e) => setKbThreshold(parseFloat(e.target.value))}
+                    className="w-full h-2 bg-gray-200 rounded-lg appearance-none cursor-pointer"
+                  />
+                  <div className="flex justify-between text-xs text-gray-500">
+                    <span>20% (极宽松)</span>
+                    <span>70% (推荐)</span>
+                    <span>95% (严格)</span>
+                  </div>
+                  <p className="text-xs text-gray-500">
+                    💡 相似度阈值越高，匹配越严格。建议值：60%-75%。
+                    {kbThreshold < 0.40 && <span className="text-orange-600"> ⚠️ 当前设置极宽松，可能返回大量不相关的内容。</span>}
+                    {kbThreshold < 0.60 && kbThreshold >= 0.40 && <span className="text-yellow-600"> ⚠️ 当前设置较宽松，请注意检查结果相关性。</span>}
+                    {kbThreshold > 0.85 && <span className="text-orange-600"> ⚠️ 当前设置较严格，可能找不到相关内容。</span>}
+                  </p>
+                </div>
+              </div>
+
+              {/* Q&A直接匹配阈值 */}
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-2">
+                  Q&A直接匹配阈值 <span className="text-xs text-gray-500">({(qaDirectThreshold * 100).toFixed(0)}%)</span>
+                </label>
+                <div className="space-y-2">
+                  <input
+                    type="range"
+                    min="0.75"
+                    max="0.98"
+                    step="0.01"
+                    value={qaDirectThreshold}
+                    onChange={(e) => setQaDirectThreshold(parseFloat(e.target.value))}
+                    className="w-full h-2 bg-purple-200 rounded-lg appearance-none cursor-pointer"
+                  />
+                  <div className="flex justify-between text-xs text-gray-500">
+                    <span>75% (宽松)</span>
+                    <span>85% (推荐)</span>
+                    <span>98% (严格)</span>
+                  </div>
+                  <p className="text-xs text-gray-500">
+                    💡 当Q&A相似度≥此阈值时，直接返回固定答案，不走知识库。建议值：85%-90%。
+                    {qaDirectThreshold < 0.80 && <span className="text-yellow-600"> ⚠️ 阈值较低，可能返回不精确的答案。</span>}
+                    {qaDirectThreshold > 0.92 && <span className="text-orange-600"> ⚠️ 阈值较高，可能导致很少直接匹配。</span>}
+                  </p>
+                </div>
+              </div>
+
+              {/* Q&A建议阈值 */}
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-2">
+                  Q&A建议阈值 <span className="text-xs text-gray-500">({(qaSuggestThreshold * 100).toFixed(0)}%)</span>
+                </label>
+                <div className="space-y-2">
+                  <input
+                    type="range"
+                    min="0.40"
+                    max="0.80"
+                    step="0.05"
+                    value={qaSuggestThreshold}
+                    onChange={(e) => setQaSuggestThreshold(parseFloat(e.target.value))}
+                    className="w-full h-2 bg-indigo-200 rounded-lg appearance-none cursor-pointer"
+                  />
+                  <div className="flex justify-between text-xs text-gray-500">
+                    <span>40% (宽松)</span>
+                    <span>55% (推荐)</span>
+                    <span>80% (严格)</span>
+                  </div>
+                  <p className="text-xs text-gray-500">
+                    💡 当Q&A相似度≥此阈值时，显示"相关问题"建议卡片。建议值：50%-65%。
+                    {qaSuggestThreshold < 0.45 && <span className="text-yellow-600"> ⚠️ 阈值较低，可能显示不相关的建议。</span>}
+                    {qaSuggestThreshold > 0.70 && <span className="text-orange-600"> ⚠️ 阈值较高，可能很少显示建议。</span>}
+                  </p>
+                </div>
+              </div>
+
+              {/* 检索文档数量 (top_k) */}
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-2">
+                  检索文档数量 (top_k) <span className="text-xs text-gray-500">({topK} 条)</span>
+                </label>
+                <div className="space-y-2">
+                  <input
+                    type="range"
+                    min="1"
+                    max="30"
+                    step="1"
+                    value={topK}
+                    onChange={(e) => setTopK(parseInt(e.target.value))}
+                    className="w-full h-2 bg-gray-200 rounded-lg appearance-none cursor-pointer"
+                  />
+                  <div className="flex justify-between text-xs text-gray-500">
+                    <span>1 条</span>
+                    <span>10 条 (推荐)</span>
+                    <span>30 条</span>
+                  </div>
+                  <p className="text-xs text-gray-500">
+                    💡 从知识库中检索的候选文档数量。数量越多，找到相关内容的概率越大，但也会增加处理时间。建议值：5-15。
+                    {topK < 5 && <span className="text-yellow-600"> ⚠️ 检索数量较少，可能遗漏相关内容。</span>}
+                    {topK > 20 && <span className="text-orange-600"> ⚠️ 检索数量较多，可能增加响应时间和token消耗。</span>}
+                  </p>
+                </div>
+              </div>
             </div>
           )}
 
           {step === 2 && modes && (
-            <div>
-              <div className="text-center mb-6">
+            <div className="space-y-6">
+              <div className="text-center">
                 <h3 className="text-xl font-bold text-gray-900 mb-2">选择工作模式</h3>
                 <p className="text-gray-600">不同模式适用于不同的使用场景</p>
               </div>
@@ -835,6 +1229,45 @@ function CreateEditAppModal({ app, onClose, onSuccess }: CreateEditAppModalProps
                 {getModeCard('safe', modes.safe)}
                 {getModeCard('standard', modes.standard)}
                 {getModeCard('enhanced', modes.enhanced)}
+              </div>
+
+              {/* 独立联网搜索开关 */}
+              <div className="border-t border-gray-200 pt-6">
+                <div className="bg-gradient-to-r from-blue-50 to-cyan-50 rounded-xl p-6 border border-blue-100">
+                  <div className="flex items-start space-x-4">
+                    <div className="flex-shrink-0 mt-1">
+                      <div className={`w-12 h-12 rounded-lg flex items-center justify-center ${
+                        enableWebSearch ? 'bg-blue-600' : 'bg-gray-400'
+                      }`}>
+                        <Globe className="w-6 h-6 text-white" />
+                      </div>
+                    </div>
+                    <div className="flex-1">
+                      <div className="flex items-center justify-between mb-2">
+                        <h4 className="text-lg font-semibold text-gray-900">🌐 联网搜索</h4>
+                        <label className="relative inline-flex items-center cursor-pointer">
+                          <input
+                            type="checkbox"
+                            checked={enableWebSearch}
+                            onChange={(e) => setEnableWebSearch(e.target.checked)}
+                            className="sr-only peer"
+                          />
+                          <div className="w-11 h-6 bg-gray-300 peer-focus:outline-none peer-focus:ring-4 peer-focus:ring-blue-300 rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-blue-600"></div>
+                        </label>
+                      </div>
+                      <p className="text-sm text-gray-700 mb-2">
+                        {enableWebSearch 
+                          ? '✅ 已启用 - 系统可联网获取实时信息，但需人工核实准确性' 
+                          : '❌ 已禁用 - 仅使用知识库和固定Q&A，响应更快更准确'
+                        }
+                      </p>
+                      <div className="flex items-center space-x-2 text-xs text-gray-600">
+                        <span>💡 提示:</span>
+                        <span>此设置独立于模式，您可以在任何模式下开启或关闭联网搜索</span>
+                      </div>
+                    </div>
+                  </div>
+                </div>
               </div>
             </div>
           )}
@@ -1657,6 +2090,204 @@ function PlaygroundModal({ app, onClose }: {
     </div>
   )
 }
+// 可拖拽的Q&A项组件
+function SortableQAItem({ 
+  qa, 
+  searchQuery, 
+  editingQA, 
+  selectedQAIds,
+  onToggleSelect,
+  onEdit, 
+  onDelete, 
+  onToggleActive, 
+  onRegenerateEmbedding, 
+  onUpdate,
+  onCancelEdit,
+  highlightText 
+}: {
+  qa: FixedQA
+  searchQuery: string
+  editingQA: FixedQA | null
+  selectedQAIds: number[]
+  onToggleSelect: (id: number) => void
+  onEdit: (qa: FixedQA) => void
+  onDelete: (id: number, question: string) => void
+  onToggleActive: (qa: FixedQA) => void
+  onRegenerateEmbedding: (id: number) => void
+  onUpdate: (qa: FixedQA) => void
+  onCancelEdit: () => void
+  highlightText: (text: string, query: string) => React.ReactNode
+}) {
+  const {
+    attributes,
+    listeners,
+    setNodeRef,
+    transform,
+    transition,
+    isDragging,
+  } = useSortable({ id: qa.id })
+
+  const style = {
+    transform: CSS.Transform.toString(transform),
+    transition,
+    opacity: isDragging ? 0.5 : 1,
+  }
+
+  return (
+    <div
+      ref={setNodeRef}
+      style={style}
+      className={`bg-gray-50 dark:bg-white/5 border rounded-xl p-4 hover:bg-gray-100 dark:hover:bg-white/10 transition-colors ${
+        !qa.is_active ? 'opacity-50' : ''
+      } ${
+        selectedQAIds.includes(qa.id) ? 'border-blue-500 bg-blue-50 dark:bg-blue-500/10' : 'border-gray-200 dark:border-white/10'
+      } ${
+        isDragging ? 'shadow-lg scale-105' : ''
+      }`}
+    >
+      <div className="flex gap-3">
+        {/* 拖拽手柄 */}
+        <div
+          {...attributes}
+          {...listeners}
+          className="cursor-grab active:cursor-grabbing flex items-start pt-1 text-gray-400 hover:text-gray-600 dark:hover:text-gray-300"
+          title="拖拽排序"
+        >
+          <GripVertical className="w-5 h-5" />
+        </div>
+
+        {/* Checkbox */}
+        <input
+          type="checkbox"
+          checked={selectedQAIds.includes(qa.id)}
+          onChange={() => onToggleSelect(qa.id)}
+          className="mt-1 w-4 h-4 rounded border-gray-600 bg-white/5 text-blue-500 focus:ring-2 focus:ring-blue-500 focus:ring-offset-0 cursor-pointer"
+        />
+
+        <div className="flex-1">
+          {editingQA?.id === qa.id ? (
+            // 编辑模式
+            <div className="space-y-3">
+              <input
+                type="text"
+                value={editingQA.question}
+                onChange={(e) => onEdit({ ...editingQA, question: e.target.value })}
+                className="w-full px-3 py-2 bg-white dark:bg-white/5 border border-gray-300 dark:border-white/10 rounded-lg text-gray-900 dark:text-white"
+                placeholder="问题"
+              />
+              <textarea
+                value={editingQA.answer}
+                onChange={(e) => onEdit({ ...editingQA, answer: e.target.value })}
+                className="w-full px-3 py-2 bg-white dark:bg-white/5 border border-gray-300 dark:border-white/10 rounded-lg text-gray-900 dark:text-white"
+                placeholder="答案"
+                rows={3}
+              />
+              <div className="flex gap-2">
+                <input
+                  type="text"
+                  value={editingQA.category || ''}
+                  onChange={(e) => onEdit({ ...editingQA, category: e.target.value })}
+                  className="flex-1 px-3 py-2 bg-white dark:bg-white/5 border border-gray-300 dark:border-white/10 rounded-lg text-gray-900 dark:text-white"
+                  placeholder="分类（可选）"
+                />
+                <input
+                  type="number"
+                  value={editingQA.priority}
+                  onChange={(e) => onEdit({ ...editingQA, priority: parseInt(e.target.value) })}
+                  className="w-24 px-3 py-2 bg-white dark:bg-white/5 border border-gray-300 dark:border-white/10 rounded-lg text-gray-900 dark:text-white"
+                  placeholder="优先级"
+                />
+              </div>
+              <div className="flex gap-2">
+                <button
+                  onClick={() => onUpdate(qa)}
+                  className="px-4 py-2 bg-blue-500 text-white rounded-lg hover:bg-blue-600"
+                >
+                  保存
+                </button>
+                <button
+                  onClick={onCancelEdit}
+                  className="px-4 py-2 bg-gray-500 text-white rounded-lg hover:bg-gray-600"
+                >
+                  取消
+                </button>
+              </div>
+            </div>
+          ) : (
+            // 查看模式
+            <div className="flex items-start gap-4">
+              <div className="flex-1">
+                <div className="flex items-start gap-2 mb-2">
+                  <span className="text-green-600 dark:text-green-400 font-medium">Q:</span>
+                  <p className="flex-1 text-gray-900 dark:text-white">{highlightText(qa.question, searchQuery)}</p>
+                </div>
+                <div className="flex items-start gap-2 mb-3">
+                  <span className="text-blue-600 dark:text-blue-400 font-medium">A:</span>
+                  <p className="flex-1 text-gray-700 dark:text-blue-200/80 whitespace-pre-line">{highlightText(qa.answer, searchQuery)}</p>
+                </div>
+                <div className="flex items-center gap-4 text-xs text-gray-500 dark:text-blue-300/70">
+                  {qa.category && (
+                    <span className="px-2 py-1 bg-purple-100 dark:bg-purple-500/20 text-purple-700 dark:text-purple-300 rounded">
+                      {highlightText(qa.category, searchQuery)}
+                    </span>
+                  )}
+                  <span>优先级: {qa.priority}</span>
+                  <span>点击: {qa.hit_count}次</span>
+                  {qa.has_embedding ? (
+                    <span className="text-green-600 dark:text-green-400 flex items-center gap-1">
+                      <CheckCircle2 className="w-3 h-3" />
+                      已向量化
+                    </span>
+                  ) : (
+                    <span className="text-yellow-600 dark:text-yellow-400 flex items-center gap-1">
+                      <AlertCircle className="w-3 h-3" />
+                      未向量化
+                    </span>
+                  )}
+                </div>
+              </div>
+              <div className="flex items-center gap-1">
+                <button
+                  onClick={() => onToggleActive(qa)}
+                  className={`p-2 rounded-lg transition-colors ${
+                    qa.is_active
+                      ? 'text-yellow-600 dark:text-yellow-300 hover:bg-yellow-100 dark:hover:bg-yellow-500/10'
+                      : 'text-green-600 dark:text-green-300 hover:bg-green-100 dark:hover:bg-green-500/10'
+                  }`}
+                  title={qa.is_active ? '禁用' : '启用'}
+                >
+                  {qa.is_active ? <Pause className="w-4 h-4" /> : <Play className="w-4 h-4" />}
+                </button>
+                <button
+                  onClick={() => onRegenerateEmbedding(qa.id)}
+                  className="p-2 text-blue-600 dark:text-blue-300 hover:bg-blue-100 dark:hover:bg-blue-500/10 rounded-lg transition-colors"
+                  title="重新生成向量"
+                >
+                  <RefreshCw className="w-4 h-4" />
+                </button>
+                <button
+                  onClick={() => onEdit(qa)}
+                  className="p-2 text-blue-600 dark:text-blue-300 hover:bg-blue-100 dark:hover:bg-blue-500/10 rounded-lg transition-colors"
+                  title="编辑"
+                >
+                  <Edit className="w-4 h-4" />
+                </button>
+                <button
+                  onClick={() => onDelete(qa.id, qa.question)}
+                  className="p-2 text-red-600 dark:text-red-300 hover:bg-red-100 dark:hover:bg-red-500/10 rounded-lg transition-colors"
+                  title="删除"
+                >
+                  <Trash2 className="w-4 h-4" />
+                </button>
+              </div>
+            </div>
+          )}
+        </div>
+      </div>
+    </div>
+  )
+}
+
 function FixedQAManagerModal({ app, onClose }: {
   app: Application
   onClose: () => void
@@ -1682,10 +2313,11 @@ function FixedQAManagerModal({ app, onClose }: {
   const [currentPage, setCurrentPage] = useState(1)
   const [pageSize, setPageSize] = useState(50)
   const [totalCount, setTotalCount] = useState(0)
+  const [viewMode, setViewMode] = useState<'paginated' | 'all'>('paginated')
 
   useEffect(() => {
     loadQAList()
-  }, [currentPage, pageSize])
+  }, [currentPage, pageSize, viewMode])
 
   // 搜索过滤
   useEffect(() => {
@@ -1705,8 +2337,19 @@ function FixedQAManagerModal({ app, onClose }: {
   const loadQAList = async () => {
     try {
       setLoading(true)
-      const skip = (currentPage - 1) * pageSize
-      const res = await axios.get(`${API_BASE}/api/fixed-qa?application_id=${app.id}&skip=${skip}&limit=${pageSize}`)
+      let skip = 0
+      let limit = pageSize
+      
+      // 如果是查看全部模式，加载所有数据
+      if (viewMode === 'all') {
+        skip = 0
+        limit = 10000 // 足够大的数字以加载所有数据
+      } else {
+        skip = (currentPage - 1) * pageSize
+        limit = pageSize
+      }
+      
+      const res = await axios.get(`${API_BASE}/api/fixed-qa?application_id=${app.id}&skip=${skip}&limit=${limit}`)
       setQaList(res.data.qa_pairs || [])
       setTotalCount(res.data.total || 0)
       setSelectedQAIds([]) // 重新加载后清空选择
@@ -1714,6 +2357,72 @@ function FixedQAManagerModal({ app, onClose }: {
       console.error('加载Q&A列表失败:', error)
     } finally {
       setLoading(false)
+    }
+  }
+  
+  const handleViewAll = () => {
+    setViewMode('all')
+    setCurrentPage(1)
+  }
+  
+  const handleViewPaginated = () => {
+    setViewMode('paginated')
+    setCurrentPage(1)
+  }
+
+  // 拖拽传感器配置
+  const sensors = useSensors(
+    useSensor(PointerSensor, {
+      activationConstraint: {
+        distance: 8, // 移动8px后才激活拖拽
+      },
+    }),
+    useSensor(KeyboardSensor, {
+      coordinateGetter: sortableKeyboardCoordinates,
+    })
+  )
+
+  // 处理拖拽结束
+  const handleDragEnd = async (event: DragEndEvent) => {
+    const { active, over } = event
+
+    if (!over || active.id === over.id) {
+      return
+    }
+
+    const oldIndex = filteredQaList.findIndex((qa) => qa.id === active.id)
+    const newIndex = filteredQaList.findIndex((qa) => qa.id === over.id)
+
+    if (oldIndex === -1 || newIndex === -1) return
+
+    // 更新本地状态
+    const newQaList = arrayMove(filteredQaList, oldIndex, newIndex)
+    setFilteredQaList(newQaList)
+    setQaList(newQaList)
+
+    // 批量更新优先级
+    try {
+      // 根据新顺序重新计算priority（从高到低）
+      const updates = newQaList.map((qa, index) => ({
+        id: qa.id,
+        priority: newQaList.length - index, // 顶部优先级最高
+      }))
+
+      // 批量更新
+      await Promise.all(
+        updates.map((update) =>
+          axios.put(`${API_BASE}/api/fixed-qa/${update.id}?application_id=${app.id}`, {
+            priority: update.priority,
+          })
+        )
+      )
+
+      console.log('✅ Q&A顺序已更新')
+    } catch (error) {
+      console.error('❌ 更新Q&A顺序失败:', error)
+      alert('更新顺序失败，请重试')
+      // 失败时重新加载
+      loadQAList()
     }
   }
 
@@ -2008,21 +2717,30 @@ function FixedQAManagerModal({ app, onClose }: {
   }
 
   return (
-    <div className="fixed inset-0 bg-black/50 backdrop-blur-sm flex items-center justify-center p-4" style={{ zIndex: 9999 }}>
-      <div className="bg-slate-800 rounded-2xl shadow-2xl w-full max-w-6xl h-[85vh] border border-white/10 flex flex-col">
+    <div className="fixed inset-0 bg-black/50 dark:bg-black/70 backdrop-blur-sm flex items-center justify-center p-4" style={{ zIndex: 9999 }}>
+      <div className="bg-white dark:bg-slate-800 rounded-2xl shadow-2xl w-full max-w-6xl h-[85vh] border border-gray-200 dark:border-white/10 flex flex-col">
         {/* Header */}
-        <div className="p-6 border-b border-white/10">
+        <div className="p-6 border-b border-gray-200 dark:border-white/10">
           <div className="flex items-center justify-between">
             <div>
-              <h2 className="text-2xl font-bold text-white flex items-center gap-3">
-                <MessageSquare className="w-7 h-7 text-green-400" />
+              <h2 className="text-2xl font-bold text-gray-900 dark:text-white flex items-center gap-3">
+                <MessageSquare className="w-7 h-7 text-green-500 dark:text-green-400" />
                 管理固定Q&A
               </h2>
-              <p className="text-blue-200 text-sm mt-1">{app.name}</p>
+              <p className="text-gray-600 dark:text-blue-200 text-sm mt-1">{app.name}</p>
             </div>
             <div className="flex items-center gap-2">
               <button
-                onClick={() => setShowAddForm(true)}
+                onClick={() => {
+                  console.log('🔘 点击添加Q&A按钮')
+                  try {
+                    setShowAddForm(true)
+                    console.log('✅ showAddForm已设置为true')
+                  } catch (error) {
+                    console.error('❌ 设置showAddForm失败:', error)
+                    alert('打开表单失败，请查看控制台错误信息')
+                  }
+                }}
                 className="px-4 py-2 bg-green-500 text-white rounded-lg hover:bg-green-600 transition-colors flex items-center gap-2"
               >
                 <Plus className="w-5 h-5" />
@@ -2030,9 +2748,9 @@ function FixedQAManagerModal({ app, onClose }: {
               </button>
               <button
                 onClick={onClose}
-                className="p-2 hover:bg-white/10 rounded-lg transition-colors"
+                className="p-2 hover:bg-gray-100 dark:hover:bg-white/10 rounded-lg transition-colors"
               >
-                <X className="w-6 h-6 text-gray-400" />
+                <X className="w-6 h-6 text-gray-500 dark:text-gray-400" />
               </button>
             </div>
           </div>
@@ -2040,38 +2758,90 @@ function FixedQAManagerModal({ app, onClose }: {
 
         {/* 搜索和批量操作栏 */}
         {!loading && qaList.length > 0 && (
-          <div className="px-6 py-4 border-b border-white/10 space-y-3">
-            {/* 搜索框 */}
-            <div className="relative">
-              <input
-                type="text"
-                value={searchQuery}
-                onChange={(e) => setSearchQuery(e.target.value)}
-                placeholder="搜索问题、答案或分类..."
-                className="w-full px-4 py-2 pl-10 bg-white/5 border border-white/10 rounded-lg text-white placeholder-gray-400 focus:outline-none focus:ring-2 focus:ring-blue-500"
-              />
-              <MessageSquare className="absolute left-3 top-2.5 w-5 h-5 text-gray-400" />
-              {searchQuery && (
+          <div className="px-6 py-4 border-b border-gray-200 dark:border-white/10 space-y-3">
+            {/* 搜索框和查看模式 */}
+            <div className="flex gap-3">
+              <div className="relative flex-1">
+                <input
+                  type="text"
+                  value={searchQuery}
+                  onChange={(e) => setSearchQuery(e.target.value)}
+                  placeholder="搜索问题、答案或分类..."
+                  className="w-full px-4 py-2 pl-10 bg-gray-50 dark:bg-white/5 border border-gray-300 dark:border-white/10 rounded-lg text-gray-900 dark:text-white placeholder-gray-500 dark:placeholder-gray-400 focus:outline-none focus:ring-2 focus:ring-blue-500"
+                />
+                <MessageSquare className="absolute left-3 top-2.5 w-5 h-5 text-gray-400" />
+                {searchQuery && (
+                  <button
+                    onClick={() => setSearchQuery('')}
+                    className="absolute right-3 top-2.5 text-gray-400 hover:text-gray-600 dark:hover:text-white"
+                  >
+                    <X className="w-5 h-5" />
+                  </button>
+                )}
+              </div>
+              
+              {/* 查看模式切换 */}
+              <div className="flex items-center gap-2 bg-gray-100 dark:bg-white/5 rounded-lg p-1">
                 <button
-                  onClick={() => setSearchQuery('')}
-                  className="absolute right-3 top-2.5 text-gray-400 hover:text-white"
+                  onClick={handleViewPaginated}
+                  className={`px-3 py-1.5 text-sm rounded-md transition-colors ${
+                    viewMode === 'paginated'
+                      ? 'bg-white dark:bg-blue-500 text-blue-600 dark:text-white shadow-sm'
+                      : 'text-gray-600 dark:text-gray-400 hover:text-gray-900 dark:hover:text-white'
+                  }`}
                 >
-                  <X className="w-5 h-5" />
+                  分页 ({pageSize}条/页)
                 </button>
-              )}
+                <button
+                  onClick={handleViewAll}
+                  className={`px-3 py-1.5 text-sm rounded-md transition-colors ${
+                    viewMode === 'all'
+                      ? 'bg-white dark:bg-blue-500 text-blue-600 dark:text-white shadow-sm'
+                      : 'text-gray-600 dark:text-gray-400 hover:text-gray-900 dark:hover:text-white'
+                  }`}
+                >
+                  全部 ({totalCount}条)
+                </button>
+              </div>
             </div>
+
+            {/* 搜索结果提示 */}
+            {searchQuery && (
+              <div className="text-sm">
+                {viewMode === 'paginated' ? (
+                  <div className="flex items-center gap-2 text-amber-600 dark:text-amber-400 bg-amber-50 dark:bg-amber-500/10 px-3 py-2 rounded-lg border border-amber-200 dark:border-amber-500/20">
+                    <AlertCircle className="w-4 h-4" />
+                    <span>
+                      在当前页找到 {filteredQaList.length} 个结果。
+                      {filteredQaList.length < totalCount && (
+                        <button
+                          onClick={handleViewAll}
+                          className="ml-2 underline hover:text-amber-700 dark:hover:text-amber-300"
+                        >
+                          查看全部{totalCount}条记录以搜索更多结果
+                        </button>
+                      )}
+                    </span>
+                  </div>
+                ) : (
+                  <div className="text-blue-600 dark:text-blue-400">
+                    在全部{totalCount}条中找到 {filteredQaList.length} 个结果
+                  </div>
+                )}
+              </div>
+            )}
 
             {/* 批量操作按钮 */}
             <div className="flex items-center justify-between">
               <div className="flex items-center gap-3">
                 <button
                   onClick={handleSelectAll}
-                  className="px-3 py-1.5 text-sm bg-white/5 text-blue-300 rounded-lg hover:bg-white/10 transition-colors border border-white/10"
+                  className="px-3 py-1.5 text-sm bg-gray-100 dark:bg-white/5 text-blue-600 dark:text-blue-300 rounded-lg hover:bg-gray-200 dark:hover:bg-white/10 transition-colors border border-gray-300 dark:border-white/10"
                 >
                   {selectedQAIds.length === filteredQaList.length ? '取消全选' : '全选'}
                 </button>
                 {selectedQAIds.length > 0 && (
-                  <span className="text-sm text-gray-400">
+                  <span className="text-sm text-gray-600 dark:text-gray-400">
                     已选择 {selectedQAIds.length} 项
                   </span>
                 )}
@@ -2081,7 +2851,7 @@ function FixedQAManagerModal({ app, onClose }: {
                 {selectedQAIds.length > 0 && (
                   <button
                     onClick={handleBatchDelete}
-                    className="px-3 py-1.5 text-sm bg-red-500/20 text-red-300 rounded-lg hover:bg-red-500/30 transition-colors flex items-center gap-2 border border-red-500/30"
+                    className="px-3 py-1.5 text-sm bg-red-50 dark:bg-red-500/20 text-red-600 dark:text-red-300 rounded-lg hover:bg-red-100 dark:hover:bg-red-500/30 transition-colors flex items-center gap-2 border border-red-200 dark:border-red-500/30"
                   >
                     <Trash2 className="w-4 h-4" />
                     批量删除
@@ -2089,7 +2859,7 @@ function FixedQAManagerModal({ app, onClose }: {
                 )}
                 <button
                   onClick={handleDeleteAll}
-                  className="px-3 py-1.5 text-sm bg-red-500/10 text-red-400 rounded-lg hover:bg-red-500/20 transition-colors flex items-center gap-2 border border-red-500/20"
+                  className="px-3 py-1.5 text-sm bg-red-50 dark:bg-red-500/10 text-red-500 dark:text-red-400 rounded-lg hover:bg-red-100 dark:hover:bg-red-500/20 transition-colors flex items-center gap-2 border border-red-200 dark:border-red-500/20"
                 >
                   <AlertCircle className="w-4 h-4" />
                   全部删除
@@ -2097,11 +2867,6 @@ function FixedQAManagerModal({ app, onClose }: {
               </div>
             </div>
 
-            {searchQuery && (
-              <div className="text-sm text-gray-400">
-                找到 {filteredQaList.length} 个结果
-              </div>
-            )}
           </div>
         )}
 
@@ -2118,158 +2883,47 @@ function FixedQAManagerModal({ app, onClose }: {
               <p className="text-sm mt-2">点击"添加Q&A"开始创建</p>
             </div>
           ) : filteredQaList.length === 0 ? (
-            <div className="flex flex-col items-center justify-center h-full text-blue-300/50">
+            <div className="flex flex-col items-center justify-center h-full text-gray-400 dark:text-blue-300/50">
               <MessageSquare className="w-16 h-16 mb-4 opacity-50" />
               <p>没有找到匹配的Q&A</p>
               <p className="text-sm mt-2">尝试其他搜索关键词</p>
             </div>
           ) : (
-            <div className="space-y-3">
-              {filteredQaList.map((qa) => (
-                <div
-                  key={qa.id}
-                  className={`bg-white/5 border rounded-xl p-4 hover:bg-white/10 transition-colors ${
-                    !qa.is_active ? 'opacity-50' : ''
-                  } ${
-                    selectedQAIds.includes(qa.id) ? 'border-blue-500 bg-blue-500/10' : 'border-white/10'
-                  }`}
-                >
-                  <div className="flex gap-3">
-                    {/* Checkbox */}
-                    <input
-                      type="checkbox"
-                      checked={selectedQAIds.includes(qa.id)}
-                      onChange={() => handleToggleSelect(qa.id)}
-                      className="mt-1 w-4 h-4 rounded border-gray-600 bg-white/5 text-blue-500 focus:ring-2 focus:ring-blue-500 focus:ring-offset-0 cursor-pointer"
+            <DndContext
+              sensors={sensors}
+              collisionDetection={closestCenter}
+              onDragEnd={handleDragEnd}
+            >
+              <SortableContext
+                items={filteredQaList.map((qa) => qa.id)}
+                strategy={verticalListSortingStrategy}
+              >
+                <div className="space-y-3">
+                  {filteredQaList.map((qa) => (
+                    <SortableQAItem
+                      key={qa.id}
+                      qa={qa}
+                      searchQuery={searchQuery}
+                      editingQA={editingQA}
+                      selectedQAIds={selectedQAIds}
+                      onToggleSelect={handleToggleSelect}
+                      onEdit={setEditingQA}
+                      onDelete={handleDelete}
+                      onToggleActive={handleToggleActive}
+                      onRegenerateEmbedding={handleRegenerateEmbedding}
+                      onUpdate={handleUpdate}
+                      onCancelEdit={() => setEditingQA(null)}
+                      highlightText={highlightText}
                     />
-
-                    <div className="flex-1">
-                      {editingQA?.id === qa.id ? (
-                    // 编辑模式
-                    <div className="space-y-3">
-                      <input
-                        type="text"
-                        value={editingQA.question}
-                        onChange={(e) => setEditingQA({ ...editingQA, question: e.target.value })}
-                        className="w-full px-3 py-2 bg-white/5 border border-white/10 rounded-lg text-white"
-                        placeholder="问题"
-                      />
-                      <textarea
-                        value={editingQA.answer}
-                        onChange={(e) => setEditingQA({ ...editingQA, answer: e.target.value })}
-                        className="w-full px-3 py-2 bg-white/5 border border-white/10 rounded-lg text-white"
-                        placeholder="答案"
-                        rows={3}
-                      />
-                      <div className="flex gap-2">
-                        <input
-                          type="text"
-                          value={editingQA.category || ''}
-                          onChange={(e) => setEditingQA({ ...editingQA, category: e.target.value })}
-                          className="flex-1 px-3 py-2 bg-white/5 border border-white/10 rounded-lg text-white"
-                          placeholder="分类（可选）"
-                        />
-                        <input
-                          type="number"
-                          value={editingQA.priority}
-                          onChange={(e) => setEditingQA({ ...editingQA, priority: parseInt(e.target.value) })}
-                          className="w-24 px-3 py-2 bg-white/5 border border-white/10 rounded-lg text-white"
-                          placeholder="优先级"
-                        />
-                      </div>
-                      <div className="flex gap-2">
-                        <button
-                          onClick={() => handleUpdate(qa)}
-                          className="px-4 py-2 bg-blue-500 text-white rounded-lg hover:bg-blue-600"
-                        >
-                          保存
-                        </button>
-                        <button
-                          onClick={() => setEditingQA(null)}
-                          className="px-4 py-2 bg-gray-500 text-white rounded-lg hover:bg-gray-600"
-                        >
-                          取消
-                        </button>
-                      </div>
-                    </div>
-                  ) : (
-                    // 查看模式
-                    <div className="flex items-start gap-4">
-                      <div className="flex-1">
-                        <div className="flex items-start gap-2 mb-2">
-                          <span className="text-green-400 font-medium">Q:</span>
-                          <p className="flex-1 text-white">{highlightText(qa.question, searchQuery)}</p>
-                        </div>
-                        <div className="flex items-start gap-2 mb-3">
-                          <span className="text-blue-400 font-medium">A:</span>
-                          <p className="flex-1 text-blue-200/80 whitespace-pre-line">{highlightText(qa.answer, searchQuery)}</p>
-                        </div>
-                        <div className="flex items-center gap-4 text-xs text-blue-300/70">
-                          {qa.category && (
-                            <span className="px-2 py-1 bg-purple-500/20 text-purple-300 rounded">
-                              {highlightText(qa.category, searchQuery)}
-                            </span>
-                          )}
-                          <span>优先级: {qa.priority}</span>
-                          <span>点击: {qa.hit_count}次</span>
-                          {qa.has_embedding ? (
-                            <span className="text-green-400 flex items-center gap-1">
-                              <CheckCircle2 className="w-3 h-3" />
-                              已向量化
-                            </span>
-                          ) : (
-                            <span className="text-yellow-400 flex items-center gap-1">
-                              <AlertCircle className="w-3 h-3" />
-                              未向量化
-                            </span>
-                          )}
-                        </div>
-                      </div>
-                      <div className="flex items-center gap-1">
-                        <button
-                          onClick={() => handleToggleActive(qa)}
-                          className={`p-2 rounded-lg transition-colors ${
-                            qa.is_active
-                              ? 'text-yellow-300 hover:bg-yellow-500/10'
-                              : 'text-green-300 hover:bg-green-500/10'
-                          }`}
-                          title={qa.is_active ? '禁用' : '启用'}
-                        >
-                          {qa.is_active ? <Pause className="w-4 h-4" /> : <Play className="w-4 h-4" />}
-                        </button>
-                        <button
-                          onClick={() => handleRegenerateEmbedding(qa.id)}
-                          className="p-2 text-blue-300 hover:bg-blue-500/10 rounded-lg transition-colors"
-                          title="重新生成向量"
-                        >
-                          <RefreshCw className="w-4 h-4" />
-                        </button>
-                        <button
-                          onClick={() => setEditingQA(qa)}
-                          className="p-2 text-blue-300 hover:bg-blue-500/10 rounded-lg transition-colors"
-                          title="编辑"
-                        >
-                          <Edit className="w-4 h-4" />
-                        </button>
-                        <button
-                          onClick={() => handleDelete(qa.id, qa.question)}
-                          className="p-2 text-red-300 hover:bg-red-500/10 rounded-lg transition-colors"
-                          title="删除"
-                        >
-                          <Trash2 className="w-4 h-4" />
-                        </button>
-                      </div>
-                    </div>
-                  )}
-                    </div>
-                  </div>
+                  ))}
                 </div>
-              ))}
-            </div>
+              </SortableContext>
+            </DndContext>
           )}
 
+
           {/* 分页控件 */}
-          {!loading && totalCount > 0 && (
+          {!loading && totalCount > 0 && viewMode === 'paginated' && (
             <div className="mt-6 flex items-center justify-between border-t border-white/10 pt-4">
               <div className="text-sm text-gray-400">
                 共 {totalCount} 条，显示第 {(currentPage - 1) * pageSize + 1} - {Math.min(currentPage * pageSize, totalCount)} 条
@@ -2336,29 +2990,45 @@ function FixedQAManagerModal({ app, onClose }: {
         {showAddForm && (
           <div className="absolute inset-0 bg-black/50 flex items-center justify-center p-4" style={{ zIndex: 10000 }}>
             <div className="bg-slate-800 rounded-xl border border-white/10 p-6 w-full max-w-4xl max-h-[90vh] overflow-y-auto">
-              <h3 className="text-xl font-bold text-white mb-4">添加新Q&A</h3>
+              <div className="flex items-center justify-between mb-4">
+                <h3 className="text-xl font-bold text-white">添加新Q&A</h3>
+                <button
+                  onClick={() => {
+                    setShowAddForm(false)
+                    setAddMode('manual')
+                    setUploadedFile(null)
+                    setGeneratedQAs([])
+                  }}
+                  className="p-2 hover:bg-white/10 rounded-lg transition-colors"
+                  title="关闭"
+                >
+                  <X className="w-5 h-5 text-gray-400" />
+                </button>
+              </div>
               
               {/* 选项卡 */}
               <div className="flex gap-2 mb-6 border-b border-white/10">
                 <button
                   onClick={() => setAddMode('manual')}
-                  className={`px-4 py-2 font-medium transition-colors ${
+                  className={`px-4 py-2 font-medium transition-colors flex items-center gap-2 ${
                     addMode === 'manual'
                       ? 'text-green-400 border-b-2 border-green-400'
                       : 'text-blue-300 hover:text-white'
                   }`}
                 >
+                  <Edit className="w-4 h-4" />
                   手动输入
                 </button>
                 <button
                   onClick={() => setAddMode('file')}
-                  className={`px-4 py-2 font-medium transition-colors ${
+                  className={`px-4 py-2 font-medium transition-colors flex items-center gap-2 ${
                     addMode === 'file'
                       ? 'text-green-400 border-b-2 border-green-400'
                       : 'text-blue-300 hover:text-white'
                   }`}
                 >
-                  CBIT-Training Model生成（文件上传）
+                  <Upload className="w-4 h-4" />
+                  文件上传（批量导入/AI生成）
                 </button>
               </div>
 
@@ -2438,11 +3108,27 @@ function FixedQAManagerModal({ app, onClose }: {
                   {generatedQAs.length === 0 ? (
                     // 上传和生成阶段
                     <>
-                      <div className="border-2 border-dashed border-white/20 rounded-xl p-8 text-center">
+                      {/* 🆕 说明卡片 */}
+                      <div className="bg-blue-500/10 border border-blue-400/30 rounded-lg p-4 mb-4">
+                        <h4 className="text-blue-300 font-medium mb-2 flex items-center gap-2">
+                          <Lightbulb className="w-4 h-4" />
+                          支持两种方式：
+                        </h4>
+                        <ul className="text-sm text-blue-200/80 space-y-1.5 ml-6">
+                          <li className="list-disc">
+                            <strong>方式1：结构化格式</strong> - 上传 <code className="px-1.5 py-0.5 bg-white/10 rounded text-xs">问题::答案</code> 格式的文件，自动解析
+                          </li>
+                          <li className="list-disc">
+                            <strong>方式2：AI智能提取</strong> - 上传任意文档，AI自动从内容中生成Q&A（需配置OpenAI API）
+                          </li>
+                        </ul>
+                      </div>
+
+                      <div className="border-2 border-dashed border-white/20 rounded-xl p-8 text-center hover:border-blue-400/50 transition-colors">
                         <Upload className="w-12 h-12 mx-auto mb-4 text-blue-400" />
-                        <p className="text-white mb-2">上传文档，AI自动生成Q&A</p>
+                        <p className="text-white text-lg font-medium mb-2">上传文档</p>
                         <p className="text-sm text-blue-300/70 mb-4">
-                          支持 TXT、DOCX、PDF 格式 • 文件大小不超过10MB
+                          支持 TXT、DOCX、PDF 格式 • 最大10MB
                         </p>
                         <input
                           type="file"
@@ -2453,9 +3139,12 @@ function FixedQAManagerModal({ app, onClose }: {
                         />
                         <label
                           htmlFor="file-upload"
-                          className="inline-block px-6 py-3 bg-blue-500 text-white rounded-lg cursor-pointer hover:bg-blue-600 transition-colors"
+                          className="inline-block px-6 py-3 bg-gradient-to-r from-blue-500 to-blue-600 text-white rounded-lg cursor-pointer hover:from-blue-600 hover:to-blue-700 transition-all shadow-lg hover:shadow-xl"
                         >
-                          选择文件
+                          <span className="flex items-center gap-2">
+                            <Upload className="w-5 h-5" />
+                            选择文件
+                          </span>
                         </label>
                       </div>
 
@@ -2482,23 +3171,27 @@ function FixedQAManagerModal({ app, onClose }: {
                           <button
                             onClick={handleGenerateFromFile}
                             disabled={generatingFromFile}
-                            className="w-full mt-4 px-6 py-3 bg-gradient-to-r from-purple-500 to-pink-500 text-white rounded-xl hover:shadow-lg transition-all disabled:opacity-50 flex items-center justify-center gap-2"
+                            className="w-full mt-4 px-6 py-4 bg-gradient-to-r from-purple-500 via-pink-500 to-purple-600 text-white rounded-xl hover:shadow-2xl transition-all disabled:opacity-50 flex items-center justify-center gap-2 font-medium text-lg"
                           >
                             {generatingFromFile ? (
                               <>
-                                <Loader2 className="w-5 h-5 animate-spin" />
-                                AI正在生成Q&A...
+                                <Loader2 className="w-6 h-6 animate-spin" />
+                                <span>AI正在分析文档...</span>
                               </>
                             ) : (
                               <>
-                                <Sparkles className="w-5 h-5" />
-                                CBIT-Training Model生成Q&A
+                                <Sparkles className="w-6 h-6" />
+                                <span>开始处理文档</span>
                               </>
                             )}
                           </button>
-                          <p className="text-xs text-blue-300/70 mt-2 text-center">
-                            使用 {app.ai_provider}/{app.llm_model} 模型生成
-                          </p>
+                          <div className="mt-3 p-3 bg-purple-500/10 border border-purple-400/30 rounded-lg">
+                            <p className="text-xs text-purple-200/90 text-center">
+                              💡 系统会自动识别文件格式：<br/>
+                              • 如果是 <code className="px-1 py-0.5 bg-white/10 rounded">问题::答案</code> 格式，直接解析<br/>
+                              • 如果是普通文档，使用 <strong>{app.ai_provider}/{app.llm_model}</strong> 智能提取
+                            </p>
+                          </div>
                         </div>
                       )}
                     </>
