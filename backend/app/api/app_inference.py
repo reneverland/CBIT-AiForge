@@ -4,6 +4,7 @@
 """
 
 from fastapi import APIRouter, Depends, HTTPException, Header
+from fastapi.responses import StreamingResponse
 from sqlalchemy.orm import Session
 from pydantic import BaseModel
 from typing import List, Optional, Dict, Any
@@ -11,12 +12,19 @@ from loguru import logger
 from datetime import datetime
 import time
 import uuid
+import json
+import asyncio
+from functools import lru_cache
+from cachetools import TTLCache
 
-from app.models.database import get_db, Application, ApplicationKnowledgeBase, KnowledgeBase, FixedQAPair, EmbeddingProvider, RetrievalLog
+from app.models.database import get_db, Application, ApplicationKnowledgeBase, KnowledgeBase, FixedQAPair, EmbeddingProvider, RetrievalLog, Conversation
 from app.core.hybrid_retrieval_engine import hybrid_retrieval_engine
 from app.core.multi_model_engine import multi_model_engine
 
 router = APIRouter()
+
+# 🚀 应用配置内存缓存 (30分钟过期，优化性能)
+_app_context_cache = TTLCache(maxsize=500, ttl=1800)
 
 
 def is_casual_conversation(query: str) -> bool:
@@ -99,8 +107,17 @@ def get_app_by_id(app_id: int, db: Session) -> Optional[Application]:
     return db.query(Application).filter(Application.id == app_id).first()
 
 
-async def prepare_app_context(app: Application, db: Session) -> Dict[str, Any]:
-    """准备应用上下文（知识库、Q&A等） - v3.0适配版"""
+async def prepare_app_context(app: Application, db: Session, use_cache: bool = True) -> Dict[str, Any]:
+    """准备应用上下文（知识库、Q&A等） - v3.0适配版 + 🚀缓存优化"""
+    
+    # 🚀 检查缓存
+    cache_key = f"app_context_{app.id}_{app.updated_at}"
+    if use_cache and cache_key in _app_context_cache:
+        logger.info(f"✅ 命中应用配置缓存: {app.name} (ID: {app.id})")
+        return _app_context_cache[cache_key]
+    
+    logger.info(f"🔄 加载应用配置: {app.name} (ID: {app.id})")
+    
     # 获取完整配置（含默认值）
     full_config = app.get_mode_config_with_defaults()
     
@@ -111,6 +128,14 @@ async def prepare_app_context(app: Application, db: Session) -> Dict[str, Any]:
     enable_web_search = full_config.get("allow_web_search", False)
     
     # 获取应用配置（适配v3.0）
+    # 🎯 知识库阈值优先级：mode_config.vector_kb_threshold > 模式默认值
+    kb_threshold = full_config.get("vector_kb_threshold", full_config.get("recommend_threshold", 0.65))
+    
+    # 🎯 动态设置策略模式
+    # 如果启用了联网搜索，使用 realtime_knowledge 模式自动触发
+    # 否则使用 safe_priority 模式需要用户授权
+    strategy_mode = "realtime_knowledge" if enable_web_search else "safe_priority"
+    
     app_config = {
         "id": app.id,
         "name": app.name,
@@ -118,10 +143,11 @@ async def prepare_app_context(app: Application, db: Session) -> Dict[str, Any]:
         "enable_vector_kb": enable_vector_kb,
         "enable_web_search": enable_web_search,
         # 策略模式配置
-        "strategy_mode": "safe_priority",  # v3.0默认安全优先
+        "strategy_mode": strategy_mode,
         "web_search_auto_threshold": full_config.get("web_search_auto_threshold", 0.50),
         "similarity_threshold_high": full_config.get("fixed_qa_threshold", 0.90),
-        "similarity_threshold_low": full_config.get("recommend_threshold", 0.65),
+        "similarity_threshold_low": kb_threshold,  # 使用知识库阈值
+        "vector_kb_threshold": kb_threshold,  # 显式设置知识库阈值
         "retrieval_strategy": "priority",
         "top_k": full_config.get("top_k", 5),
         "fixed_qa_weight": 1.0,
@@ -138,10 +164,12 @@ async def prepare_app_context(app: Application, db: Session) -> Dict[str, Any]:
         "sensitive_words": [],
         "enable_source_tracking": full_config.get("enable_source_tracking", True),
         "enable_citation": full_config.get("enable_citation", True),
-        "system_prompt": None,
+        "system_prompt": full_config.get("system_prompt"),  # 🔧 修复：从配置中读取系统提示词
         "temperature": app.temperature,
         "max_tokens": full_config.get("max_tokens", 2000)
     }
+    
+    logger.info(f"📊 应用 [{app.name}] 知识库检索阈值: {kb_threshold:.2%}")
     
     # 🔑 关键修复：确保融合策略配置中包含fixed_qa配置
     if "fusion_config" not in app_config or not app_config["fusion_config"]:
@@ -160,9 +188,12 @@ async def prepare_app_context(app: Application, db: Session) -> Dict[str, Any]:
     app_config["fusion_config"]["fixed_qa"]["qa_min_threshold"] = strategy_config.get("qa_min_threshold", 0.50)  # 最低匹配阈值
     app_config["fusion_config"]["fixed_qa"]["max_suggestions"] = strategy_config.get("max_suggestions", 3)
     
+    # 🔍 调试日志：显示实际使用的 QA 阈值配置
+    logger.info(f"📊 应用 [{app.name}] QA阈值配置: 直接匹配={app_config['fusion_config']['fixed_qa']['direct_match_threshold']:.0%}, 建议={app_config['fusion_config']['fixed_qa']['suggest_threshold']:.0%}")
+    
     # 获取固定Q&A对
     fixed_qa_pairs = []
-    if app.enable_fixed_qa:
+    if enable_fixed_qa:  # 🔧 修复：使用局部变量而不是app.enable_fixed_qa
         qa_list = db.query(FixedQAPair).filter(
             FixedQAPair.application_id == app.id,
             FixedQAPair.is_active == True
@@ -184,7 +215,7 @@ async def prepare_app_context(app: Application, db: Session) -> Dict[str, Any]:
     
     # 获取关联的知识库
     knowledge_bases = []
-    if app.enable_vector_kb:
+    if enable_vector_kb:  # 🔧 修复：使用局部变量而不是app.enable_vector_kb
         kb_assocs = db.query(ApplicationKnowledgeBase).filter(
             ApplicationKnowledgeBase.application_id == app.id
         ).order_by(ApplicationKnowledgeBase.priority).all()
@@ -198,11 +229,12 @@ async def prepare_app_context(app: Application, db: Session) -> Dict[str, Any]:
                     "id": kb.id,
                     "name": kb.name,
                     "collection_name": kb.collection_name,
+                    "embedding_provider_id": kb.embedding_provider_id,  # 🔑 添加 embedding_provider_id
                     "priority": assoc.priority,
                     "weight": assoc.weight,
                     "boost_factor": assoc.boost_factor
                 })
-                logger.info(f"✅ 添加知识库: {kb.name} (collection: {kb.collection_name})")
+                logger.info(f"✅ 添加知识库: {kb.name} (collection: {kb.collection_name}, embedding_provider_id: {kb.embedding_provider_id})")
             else:
                 logger.warning(f"⚠️ 知识库ID {assoc.knowledge_base_id} 不存在，跳过")
     
@@ -220,12 +252,281 @@ async def prepare_app_context(app: Application, db: Session) -> Dict[str, Any]:
             "base_url": embedding_provider.base_url
         }
     
-    return {
+    context = {
         "app_config": app_config,
         "fixed_qa_pairs": fixed_qa_pairs,
         "knowledge_bases": knowledge_bases,
         "embedding_provider_config": embedding_provider_config
     }
+    
+    # 🚀 存入缓存
+    if use_cache:
+        _app_context_cache[cache_key] = context
+        logger.info(f"💾 应用配置已缓存: {app.name} (缓存大小: {len(_app_context_cache)})")
+    
+    return context
+
+
+# 流式响应生成器
+async def stream_chat_completion(app: Application, request: ChatCompletionRequest, db: Session):
+    """流式聊天完成生成器（SSE格式）"""
+    try:
+        # 🔧 修复：提取最后一条用户查询（支持对话上下文）
+        user_messages = [msg for msg in request.messages if msg.role == "user"]
+        if not user_messages:
+            yield f"data: {json.dumps({'error': '请求中没有用户消息'})}\n\n"
+            return
+        
+        query = user_messages[-1].content  # 获取最后一条用户消息
+        logger.info(f"🔍 [流式] 提取查询 - 对话中共有 {len(user_messages)} 条用户消息，当前查询: {query}")
+        start_time = time.time()
+        
+        # 🔧 特殊处理：用户直接选择了某个Q&A（与非流式版本一致）
+        if request.selected_qa_id:
+            qa = db.query(FixedQAPair).filter(
+                FixedQAPair.id == request.selected_qa_id,
+                FixedQAPair.application_id == app.id
+            ).first()
+            
+            if qa:
+                # 更新点击统计
+                qa.hit_count += 1
+                qa.last_hit_at = datetime.utcnow()
+                db.commit()
+                
+                logger.info(f"✅ [流式] 用户直接选择固定Q&A: {qa.question}")
+                
+                # 以流式方式返回Q&A答案（模拟打字效果）
+                answer_chars = qa.answer
+                
+                # 逐字符发送（可以调整chunk_size来控制速度）
+                chunk_size = 5  # 每次发送5个字符
+                for i in range(0, len(answer_chars), chunk_size):
+                    chunk = answer_chars[i:i+chunk_size]
+                    yield f"data: {json.dumps({'choices': [{'delta': {'content': chunk}}]})}\n\n"
+                    await asyncio.sleep(0.01)  # 10ms延迟，模拟打字效果
+                
+                # 发送元数据
+                metadata = {
+                    "metadata": {
+                        "source": "fixed_qa",
+                        "qa_id": qa.id,
+                        "question": qa.question,
+                        "confidence": 1.0
+                    },
+                    "cbit_metadata": {
+                        "source": "fixed_qa",
+                        "matched_fixed_qa": True,
+                        "retrieval_time_ms": 0,
+                        "total_time_ms": (time.time() - start_time) * 1000
+                    }
+                }
+                yield f"data: {json.dumps(metadata)}\n\n"
+                yield "data: [DONE]\n\n"
+                return
+        
+        # 准备上下文（与非流式版本相同的逻辑）
+        context = await prepare_app_context(app, db)
+        
+        logger.info(f"🎯 [流式] 应用 [{app.name}] 收到查询: {query}")
+        
+        # 🔧 如果用户选择"继续思考"，临时禁用固定Q&A
+        if request.skip_fixed_qa:
+            original_enable_fixed_qa = context["app_config"].get("enable_fixed_qa", True)
+            context["app_config"]["enable_fixed_qa"] = False
+            context["fixed_qa_pairs"] = []
+            logger.info("⏭️ [流式] 用户选择继续思考，跳过固定Q&A检索")
+        
+        # 执行检索
+        retrieval_result = await hybrid_retrieval_engine.retrieve(
+            query=query,
+            app_config=context["app_config"],
+            fixed_qa_pairs=context["fixed_qa_pairs"],
+            knowledge_bases=context["knowledge_bases"],
+            embedding_provider_config=context["embedding_provider_config"]
+        )
+        
+        retrieval_time = retrieval_result["timing"]["total_ms"]
+        
+        # 🔧 关键修复：如果用户选择"继续思考"，过滤掉所有固定Q&A引用
+        if request.skip_fixed_qa:
+            original_ref_count = len(retrieval_result.get("references", []))
+            retrieval_result["references"] = [
+                ref for ref in retrieval_result.get("references", [])
+                if ref.get("source_type") != "fixed_qa"
+            ]
+            filtered_count = original_ref_count - len(retrieval_result.get("references", []))
+            if filtered_count > 0:
+                logger.info(f"🗑️ [流式] 已过滤 {filtered_count} 个固定Q&A引用（继续思考模式）")
+            # 恢复原始配置
+            context["app_config"]["enable_fixed_qa"] = original_enable_fixed_qa
+        
+        # 🔧 检查Q&A匹配情况（区分直接返回和建议确认）
+        original_enable_fixed_qa = context["app_config"].get("enable_fixed_qa", True)
+        direct_qa_match = None  # 高相似度直接匹配
+        suggested_questions_for_confirmation = []  # 中等相似度建议
+        
+        for ref in retrieval_result.get("references", []):
+            if ref.get("source_type") == "fixed_qa":
+                match_type = ref.get("match_type", "suggest")
+                
+                # 🎯 优先检查是否有直接匹配（相似度≥0.90）
+                if match_type == "direct" and not direct_qa_match:
+                    direct_qa_match = ref
+                    logger.info(f"🎯 [流式] 检测到直接Q&A匹配: {ref.get('question', '')} (相似度: {ref.get('similarity', 0):.2%})")
+                
+                # 收集建议问题（相似度0.55-0.90）
+                if match_type == "suggest":
+                    suggested_questions_for_confirmation.append({
+                        "question": ref.get("question", ""),
+                        "similarity": round(ref.get("similarity", 0), 4),
+                        "qa_id": ref.get("id")
+                    })
+        
+        logger.info(f"🔍 [流式] Q&A检查: direct_match={direct_qa_match is not None}, suggested_questions={len(suggested_questions_for_confirmation)}, skip_fixed_qa={request.skip_fixed_qa}, original_enable_fixed_qa={original_enable_fixed_qa}")
+        
+        # 🎯 场景1: 有直接匹配的Q&A，直接返回（最高优先级）
+        if direct_qa_match and not request.skip_fixed_qa and not request.selected_qa_id and not request.force_web_search and original_enable_fixed_qa:
+            logger.info(f"✅ [流式] 直接返回Q&A答案: {direct_qa_match.get('question', '')}")
+            
+            # 以流式方式返回Q&A答案
+            answer_text = direct_qa_match.get("answer", "")
+            
+            # 逐字符发送（模拟打字效果）
+            chunk_size = 5
+            for i in range(0, len(answer_text), chunk_size):
+                chunk = answer_text[i:i+chunk_size]
+                yield f"data: {json.dumps({'choices': [{'delta': {'content': chunk}}]})}\n\n"
+                await asyncio.sleep(0.01)
+            
+            # 发送元数据
+            metadata = {
+                "metadata": {
+                    "source": "fixed_qa",
+                    "qa_id": direct_qa_match.get("id"),
+                    "question": direct_qa_match.get("question"),
+                    "similarity": direct_qa_match.get("similarity"),
+                    "match_type": "direct"
+                },
+                "cbit_metadata": {
+                    "source": "fixed_qa",
+                    "matched_fixed_qa": True,
+                    "match_type": "direct",
+                    "references": [direct_qa_match],
+                    "retrieval_time_ms": retrieval_time,
+                    "total_time_ms": (time.time() - start_time) * 1000
+                }
+            }
+            yield f"data: {json.dumps(metadata)}\n\n"
+            yield "data: [DONE]\n\n"
+            return
+        
+        # 🔔 场景2: 没有直接匹配，但有建议问题，先发送建议卡片，然后继续生成AI回答
+        has_suggested_questions = False
+        if suggested_questions_for_confirmation and not request.skip_fixed_qa and not request.selected_qa_id and not request.force_web_search and original_enable_fixed_qa:
+            # 检查最高相似度是否达到建议阈值
+            max_similarity = max([q.get('similarity', 0) for q in suggested_questions_for_confirmation]) if suggested_questions_for_confirmation else 0
+            
+            # 从fusion_config获取固定Q&A配置
+            fusion_config = context["app_config"].get("fusion_config", {})
+            fixed_qa_config = fusion_config.get("fixed_qa", {})
+            suggest_threshold = fixed_qa_config.get("suggest_threshold", 0.55)
+            
+            # 如果相似度达到建议阈值，先发送建议事件（但不结束流式输出，继续生成AI回答）
+            if max_similarity >= suggest_threshold:
+                logger.info(f"💡 [流式] 检测到 {len(suggested_questions_for_confirmation)} 个相关Q&A（最高相似度: {max_similarity:.2%}），发送建议卡片并继续生成AI回答")
+                
+                # 发送Q&A建议事件
+                confirmation_data = {
+                    "choices": [{
+                        "delta": {
+                            "content": ""
+                        }
+                    }],
+                    "metadata": {
+                        "needs_confirmation": True,
+                        "source": "fixed_qa_suggestion"
+                    },
+                    "cbit_metadata": {
+                        "needs_confirmation": True,
+                        "suggested_questions": suggested_questions_for_confirmation[:3],
+                        "retrieval_time_ms": retrieval_time,
+                        "total_time_ms": (time.time() - start_time) * 1000
+                    }
+                }
+                yield f"data: {json.dumps(confirmation_data)}\n\n"
+                has_suggested_questions = True
+                # 注意：这里不再 return，继续往下执行生成AI回答
+        
+        confidence = retrieval_result.get("confidence_score", 0)
+        is_casual = is_casual_conversation(query)
+        
+        # 对于非LLM生成的情况（日常对话、低置信度等），直接返回完整答案
+        min_threshold = context["app_config"].get("similarity_threshold_low", 0.3)
+        
+        # 构建LLM请求
+        system_prompt = context["app_config"].get("system_prompt") or "你是一个有帮助的AI助手。"
+        
+        if not is_casual and retrieval_result.get("answer"):
+            context_text = f"\n\n相关信息：\n{retrieval_result['answer']}"
+            system_prompt += context_text
+        
+        enhanced_messages = [
+            {"role": "system", "content": system_prompt}
+        ] + [{"role": msg.role, "content": msg.content} for msg in request.messages]
+        
+        # 从数据库加载AI提供商配置
+        ai_provider_obj = db.query(EmbeddingProvider).filter(
+            EmbeddingProvider.provider_type == app.ai_provider
+        ).first()
+        
+        if not ai_provider_obj or not ai_provider_obj.api_key:
+            yield f"data: {json.dumps({'error': f'AI提供商 {app.ai_provider} 未配置'})}\n\n"
+            return
+        
+        multi_model_engine.set_api_key(app.ai_provider, ai_provider_obj.api_key)
+        if ai_provider_obj.base_url:
+            multi_model_engine.set_custom_config(app.ai_provider, {
+                "base_url": ai_provider_obj.base_url
+            })
+        
+        # 🚀 调用LLM流式生成
+        logger.info(f"🤖 [流式] 开始LLM生成")
+        
+        async for chunk in multi_model_engine.chat_completion_stream(
+            provider=app.ai_provider,
+            model=app.llm_model,
+            messages=enhanced_messages,
+            temperature=request.temperature or app.temperature,
+            max_tokens=request.max_tokens or context["app_config"].get("max_tokens", 2000)
+        ):
+            content = chunk.get("choices", [{}])[0].get("delta", {}).get("content", "")
+            if content:
+                yield f"data: {json.dumps({'choices': [{'delta': {'content': content}}]})}\n\n"
+                await asyncio.sleep(0)  # 让出控制权
+        
+        # 发送元数据
+        metadata = {
+            "metadata": retrieval_result.get("_strategy_info") or {},
+            "cbit_metadata": {
+                "retrieval_sources": {
+                    "fixed_qa": context["app_config"]["enable_fixed_qa"],
+                    "vector_kb": context["app_config"]["enable_vector_kb"],
+                    "web_search": context["app_config"]["enable_web_search"]
+                },
+                "timing": {
+                    "total_ms": (time.time() - start_time) * 1000
+                }
+            }
+        }
+        yield f"data: {json.dumps(metadata)}\n\n"
+        yield "data: [DONE]\n\n"
+        
+        logger.info(f"✅ [流式] 响应完成")
+        
+    except Exception as e:
+        logger.error(f"❌ [流式] 生成失败: {e}")
+        yield f"data: {json.dumps({'error': str(e)})}\n\n"
 
 
 # API端点
@@ -300,6 +601,7 @@ async def app_chat_completion(
     """
     应用级聊天补全API（OpenAI兼容）
     使用混合检索+LLM生成答案
+    支持流式输出（stream=true）
     """
     # 验证API密钥
     if not authorization or not authorization.startswith("Bearer "):
@@ -319,13 +621,32 @@ async def app_chat_completion(
     if not app.is_active:
         raise HTTPException(status_code=403, detail="应用未激活")
     
-    # 提取用户查询
-    user_message = next((msg for msg in request.messages if msg.role == "user"), None)
-    if not user_message:
+    # 🚀 流式输出支持
+    if request.stream:
+        return StreamingResponse(
+            stream_chat_completion(app, request, db),
+            media_type="text/event-stream",
+            headers={
+                "Cache-Control": "no-cache",
+                "Connection": "keep-alive",
+                "X-Accel-Buffering": "no"  # 禁用nginx缓冲
+            }
+        )
+    
+    # 🔧 修复：提取最后一条用户查询（支持对话上下文）
+    user_messages = [msg for msg in request.messages if msg.role == "user"]
+    if not user_messages:
         raise HTTPException(status_code=400, detail="请求中没有用户消息")
     
-    query = user_message.content
+    query = user_messages[-1].content  # 获取最后一条用户消息
+    logger.info(f"🔍 提取查询 - 对话中共有 {len(user_messages)} 条用户消息，当前查询: {query}")
     start_time = time.time()
+    
+    # 初始化响应变量
+    answer = None
+    source = None
+    tokens_used = 0
+    generation_time = 0
     
     # 特殊处理：用户直接选择了某个Q&A
     if request.selected_qa_id:
@@ -412,6 +733,17 @@ async def app_chat_completion(
     )
     retrieval_time = (time.time() - retrieval_start) * 1000
     
+    # 🔧 关键修复：如果用户选择"继续思考"，过滤掉所有固定Q&A引用
+    if request.skip_fixed_qa:
+        original_ref_count = len(retrieval_result.get("references", []))
+        retrieval_result["references"] = [
+            ref for ref in retrieval_result.get("references", [])
+            if ref.get("source_type") != "fixed_qa"
+        ]
+        filtered_count = original_ref_count - len(retrieval_result.get("references", []))
+        if filtered_count > 0:
+            logger.info(f"🗑️ 已过滤 {filtered_count} 个固定Q&A引用（继续思考模式）")
+    
     # 恢复原始配置
     if request.skip_fixed_qa:
         context["app_config"]["enable_fixed_qa"] = original_enable_fixed_qa
@@ -438,10 +770,10 @@ async def app_chat_completion(
         # 检查最高相似度是否达到建议阈值
         max_similarity = max([q.get('similarity', 0) for q in suggested_questions_for_confirmation]) if suggested_questions_for_confirmation else 0
         
-        # 从fusion_config获取固定Q&A配置
-        fusion_config = app.fusion_config or {}
+        # 从fusion_config获取固定Q&A配置（v3.0适配）
+        fusion_config = context["app_config"].get("fusion_config", {})
         fixed_qa_config = fusion_config.get("fixed_qa", {})
-        suggest_threshold = fixed_qa_config.get("suggest_threshold", 0.75)  # 默认0.75
+        suggest_threshold = fixed_qa_config.get("suggest_threshold", 0.55)  # 默认0.55
         
         # 如果相似度达到建议阈值，显示确认界面
         if max_similarity >= suggest_threshold:
@@ -474,11 +806,11 @@ async def app_chat_completion(
             }
     
     # ============ 优化的阈值判断系统 ============
-    # 获取配置的阈值
-    min_threshold = app.similarity_threshold_low    # 最低阈值（如0.3）
-    high_threshold = app.similarity_threshold_high  # 高阈值（建议设置为0.9，极高置信度才直接返回）
+    # 获取配置的阈值（v3.0适配）
+    min_threshold = context["app_config"].get("similarity_threshold_low", 0.3)  # 最低阈值
+    high_threshold = context["app_config"].get("similarity_threshold_high", 0.9)  # 高阈值
     confidence = retrieval_result.get("confidence_score", 0)
-    enable_polish = app.enable_llm_polish if app.enable_llm_polish is not None else True  # 默认启用润色
+    enable_polish = context["app_config"].get("fusion_config", {}).get("enable_llm_polish", True)  # 默认启用润色
     
     logger.info(f"🎯 置信度评估: {confidence:.2%} (最低阈值: {min_threshold:.2%}, 高阈值: {high_threshold:.2%}, LLM润色: {'✅' if enable_polish else '❌'})")
     
@@ -496,8 +828,8 @@ async def app_chat_completion(
         # 🆕 获取策略模式
         strategy_mode = context["app_config"].get("strategy_mode", "safe_priority")
         
-        # 🛡️ 安全优先模式 - 提示用户授权联网
-        if strategy_mode == "safe_priority" and context["app_config"]["enable_web_search"]:
+        # 🛡️ 安全优先模式 - 提示用户授权联网（仅在用户未授权时）
+        if strategy_mode == "safe_priority" and context["app_config"]["enable_web_search"] and not request.force_web_search:
             logger.info(f"🛡️ 安全优先模式 + 低置信度 ({confidence:.2%} < {min_threshold:.2%})，提示用户授权联网")
             return {
                 "id": f"app-{app.id}-web-search-auth",
@@ -532,15 +864,22 @@ async def app_chat_completion(
             answer = "🚫 抱歉，我无法准确回答这个问题。"
             source = "auto_reject"
         
-        # 其他情况：使用自定义回复或默认提示
-        elif app.enable_custom_no_result_response and app.custom_no_result_response:
-            logger.info(f"📢 置信度过低 ({confidence:.2%} < {min_threshold:.2%})，返回自定义回复")
-            answer = app.custom_no_result_response
-            source = "no_result"
+        # 用户已授权联网但搜索失败 - 提供明确反馈
+        elif request.force_web_search:
+            logger.info(f"🌐 用户已授权联网但未找到结果，提供明确反馈")
+            answer = "🔍 很抱歉，我在知识库和网络搜索中都未能找到相关信息。\n\n💡 建议：\n• 尝试换个方式提问\n• 联系人工客服获取帮助"
+            source = "web_search_no_result"
+        
+        # 其他情况：使用fallback消息或默认提示（v3.0适配）
         else:
-            # 未配置自定义回复，使用默认提示
-            logger.warning(f"⚠️ 置信度过低但未配置自定义回复，使用默认提示")
-            answer = "抱歉，我无法准确回答这个问题。建议您联系人工客服获取帮助。"
+            fallback_message = context["app_config"].get("fusion_config", {}).get("fallback_message")
+            if fallback_message:
+                logger.info(f"📢 置信度过低 ({confidence:.2%} < {min_threshold:.2%})，返回fallback消息")
+                answer = fallback_message
+            else:
+                # 未配置fallback消息，使用默认提示
+                logger.warning(f"⚠️ 置信度过低但未配置fallback消息，使用默认提示")
+                answer = "抱歉，我无法准确回答这个问题。建议您联系人工客服获取帮助。"
             source = "no_result"
         tokens_used = 0
         generation_time = 0
@@ -581,7 +920,7 @@ async def app_chat_completion(
                 messages=[{"role": msg.role, "content": msg.content} for msg in enhanced_messages],
                 stream=request.stream,
                 temperature=request.temperature or app.temperature or 0.7,
-                max_tokens=request.max_tokens or app.max_tokens or 500
+                max_tokens=request.max_tokens or context["app_config"].get("max_tokens", 2000)
             )
             
             answer = llm_response["choices"][0]["message"]["content"]
@@ -606,20 +945,23 @@ async def app_chat_completion(
         generation_time = 0
     
     # 场景3：其他情况（包括启用润色或中等置信度）- LLM+知识库结合输出
-    else:
+    # 但如果answer已经被设置（如联网搜索失败），则跳过LLM生成
+    elif not answer:
         if enable_polish:
             logger.info(f"🤖 启用LLM润色模式，调用LLM结合知识库生成更自然的答案（置信度: {confidence:.2%}）")
         else:
             logger.info(f"🤖 中等置信度 ({min_threshold:.2%} <= {confidence:.2%} < {high_threshold:.2%})，调用LLM结合知识库生成答案")
         generation_start = time.time()
         
-        # 构建增强的prompt
-        system_prompt = app.system_prompt or "你是一个有帮助的AI助手。"
+        # 构建增强的prompt（v3.0适配）
+        system_prompt = context["app_config"].get("system_prompt") or "你是一个有帮助的AI助手。"
         
         # 添加检索到的上下文
         context_text = ""
         if retrieval_result.get("answer"):
             context_text = f"\n\n相关信息：\n{retrieval_result['answer']}"
+            logger.info(f"📝 传递给LLM的上下文长度: {len(retrieval_result['answer'])} 字符")
+            logger.debug(f"📝 上下文内容预览: {retrieval_result['answer'][:200]}...")
         
         if retrieval_result.get("references"):
             context_text += "\n\n参考来源："
@@ -628,13 +970,29 @@ async def app_chat_completion(
                     context_text += f"\n{i}. [固定Q&A] {ref.get('question', '')}"
                 elif ref["source_type"] == "kb":
                     context_text += f"\n{i}. [知识库: {ref.get('kb_name', '')}]"
+                    logger.info(f"📚 来源{i}: 知识库 {ref.get('kb_name', 'unknown')}")
         
         # 添加指导性提示，避免编造
-        if confidence < (min_threshold + high_threshold) / 2:  # 置信度偏低时
-            context_text += "\n\n注意：如果提供的信息不足以准确回答问题，请诚实告知用户信息不足，不要编造内容。"
+        # 使用更合理的阈值: min_threshold + 0.2 * (high_threshold - min_threshold)
+        # 即60% + 0.2 * 35% = 67%
+        cautious_threshold = min_threshold + 0.2 * (high_threshold - min_threshold)
+        if confidence < cautious_threshold:  # 置信度很低时才加警告
+            guidance = "\n\n注意：基于上述提供的信息尽力回答，如果信息明显不足以准确回答问题，请告知用户。"
+            logger.info(f"⚠️ 置信度 {confidence:.2%} < {cautious_threshold:.2%}，使用保守提示")
+        else:
+            # 置信度中等或较高时，鼓励LLM基于上下文回答
+            guidance = "\n\n请基于上述信息，用自然、友好的语言回答用户的问题。"
+            logger.info(f"✅ 置信度 {confidence:.2%} >= {cautious_threshold:.2%}，使用鼓励性提示")
+        
+        context_text += guidance
+        final_system_prompt = system_prompt + context_text
+        
+        logger.info(f"📄 完整System Prompt长度: {len(final_system_prompt)} 字符")
+        logger.info(f"📄 基础System Prompt长度: {len(system_prompt)} 字符, 上下文长度: {len(context_text)} 字符")
+        logger.debug(f"📄 System Prompt内容:\n{final_system_prompt}")
         
         enhanced_messages = [
-            ChatMessage(role="system", content=system_prompt + context_text)
+            ChatMessage(role="system", content=final_system_prompt)
         ] + request.messages
         
         # 调用LLM前，先加载API密钥
@@ -666,7 +1024,7 @@ async def app_chat_completion(
                 messages=[{"role": msg.role, "content": msg.content} for msg in enhanced_messages],
                 stream=request.stream,
                 temperature=request.temperature or app.temperature,
-                max_tokens=request.max_tokens or app.max_tokens
+                max_tokens=request.max_tokens or context["app_config"].get("max_tokens", 2000)
             )
             
             answer = llm_response["choices"][0]["message"]["content"]
@@ -677,21 +1035,28 @@ async def app_chat_completion(
         except Exception as e:
             logger.error(f"❌ LLM生成失败: {e}")
             
-            # LLM失败时的降级策略
-            if app.enable_custom_no_result_response and app.custom_no_result_response:
-                # 有自定义回复，使用自定义回复
-                logger.info(f"📢 LLM失败，使用自定义回复")
-                answer = app.custom_no_result_response
-                source = "no_result"
-            elif retrieval_result.get("answer") and confidence >= min_threshold:
-                # 有检索结果且置信度不是太低，使用检索结果
-                logger.info(f"📋 LLM失败，使用检索结果")
-                answer = retrieval_result["answer"]
-                source = "retrieval"
+            # LLM失败时的降级策略（v3.0适配）
+            # 优先级：检索结果 > fallback+检索结果 > fallback消息 > 默认提示
+            if retrieval_result.get("answer"):
+                # 有检索结果，直接使用或添加前缀
+                logger.info(f"📋 LLM失败，使用检索结果（置信度: {confidence:.2%}）")
+                fallback_message = context["app_config"].get("fusion_config", {}).get("fallback_message")
+                if fallback_message and confidence < high_threshold:
+                    # 置信度不够高，添加前缀说明
+                    answer = f"{fallback_message}\n\n{retrieval_result['answer']}"
+                else:
+                    # 置信度够高，直接使用检索结果
+                    answer = retrieval_result["answer"]
+                source = retrieval_result.get("matched_source", "retrieval")
             else:
-                # 什么都没有，返回默认提示
-                logger.warning(f"⚠️ LLM失败且无可用结果")
-                answer = "抱歉，我暂时无法回答这个问题。请稍后重试或联系人工客服。"
+                # 没有检索结果，使用fallback消息或默认提示
+                fallback_message = context["app_config"].get("fusion_config", {}).get("fallback_message")
+                if fallback_message:
+                    logger.info(f"📢 LLM失败且无检索结果，使用fallback消息")
+                    answer = fallback_message
+                else:
+                    logger.warning(f"⚠️ LLM失败且无可用结果")
+                    answer = "抱歉，我暂时无法回答这个问题。请稍后重试或联系人工客服。"
                 source = "no_result"
             
             tokens_used = 0
@@ -705,8 +1070,8 @@ async def app_chat_completion(
     app.total_tokens += tokens_used if 'tokens_used' in locals() else 0
     db.commit()
     
-    # 记录检索日志
-    if app.enable_source_tracking:
+    # 记录检索日志（v3.0适配）
+    if context["app_config"].get("enable_source_tracking", True):
         log = RetrievalLog(
             application_id=app.id,
             query=query,
@@ -790,7 +1155,7 @@ async def app_chat_completion(
     }
     
     # 如果启用来源追溯，添加额外的内部metadata
-    if app.enable_source_tracking:
+    if context["app_config"].get("enable_source_tracking", True):  # v3.0适配
         # 确定主要来源的显示名称
         source_display_map = {
             "retrieval": "检索结果",
@@ -836,7 +1201,7 @@ async def app_chat_completion(
                 "matched_source": matched_source,
                 "matched_source_display": matched_source_display,
                 "retrieval_path": retrieval_result.get("retrieval_path", []),
-                "references": retrieval_result.get("references") if app.enable_citation else [],
+                "references": retrieval_result.get("references") if context["app_config"].get("enable_citation", True) else [],
                 "suggestions": retrieval_result.get("suggestions") if retrieval_result.get("has_suggestions") else [],
                 "_strategy_info": strategy_info
             }
@@ -857,6 +1222,29 @@ async def app_chat_completion(
                 "confidence": round(confidence, 4),
                 "confidence_level": _get_confidence_level_display(confidence)
             }
+    
+    # ========== 保存对话记录 ==========
+    try:
+        conversation = Conversation(
+            application_id=app.id,
+            user_message=query,
+            ai_response=answer,
+            conversation_metadata={
+                "matched_source": retrieval_result.get("matched_source"),
+                "confidence": round(confidence, 4),
+                "source": source,
+                "is_casual": is_casual if 'is_casual' in locals() else False,
+                "references": retrieval_result.get("references", [])[:3]  # 只保存前3个引用
+            },
+            tokens_used=tokens_used if 'tokens_used' in locals() else None,
+            latency_ms=round(total_time, 2)
+        )
+        db.add(conversation)
+        db.commit()
+        logger.debug(f"💾 对话已保存到数据库 (ID: {conversation.id})")
+    except Exception as e:
+        logger.warning(f"⚠️ 保存对话失败: {e}")
+        # 不影响主流程，继续返回响应
     
     return response
 

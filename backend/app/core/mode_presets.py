@@ -6,6 +6,9 @@
 # 🔒 安全模式配置
 SAFE_MODE = {
     "priority_order": ["fixed_qa_exact", "fixed_qa_similar"],
+    "enable_fixed_qa": True,  # 显式启用Q&A
+    "enable_vector_kb": False,  # 不启用向量知识库
+    "enable_web_search": False,  # 不启用联网搜索
     "fixed_qa_threshold": 0.85,
     "recommend_count": 5,
     "recommend_threshold": 0.65,
@@ -14,6 +17,8 @@ SAFE_MODE = {
     "enable_llm_polish": False,
     "enable_source_tracking": True,
     "enable_citation": True,
+    "web_search_domains": [],  # 不限制搜索域名
+    "search_channels": ["tavily", "google", "serper"],  # 搜索引擎通道
     "fallback_message": "抱歉，未找到准确答案。以下是相关问题推荐：",
     "max_tokens": 1500,
     "top_k": 5
@@ -22,6 +27,9 @@ SAFE_MODE = {
 # ⚡ 标准模式配置（推荐）
 STANDARD_MODE = {
     "priority_order": ["fixed_qa_exact", "fixed_qa_similar", "vector_kb", "ai_generation"],
+    "enable_fixed_qa": True,  # 显式启用Q&A
+    "enable_vector_kb": True,  # 启用向量知识库
+    "enable_web_search": False,  # 不启用联网搜索
     "fixed_qa_threshold": 0.90,
     "fixed_qa_recommend_threshold": 0.70,
     "vector_kb_threshold": 0.75,
@@ -32,15 +40,32 @@ STANDARD_MODE = {
     "enable_llm_polish": True,
     "enable_source_tracking": True,
     "enable_citation": True,
+    "web_search_domains": [],  # 不限制搜索域名
+    "search_channels": ["tavily", "google", "serper"],  # 搜索引擎通道
     "fallback_message": "根据知识库内容，我为您生成了以下答案：",
     "ai_generation_note": "【AI生成-建议核实】",
+    "web_search_note": "【含联网信息】",
     "max_tokens": 2000,
-    "top_k": 5
+    "top_k": 5,
+    # Q&A匹配策略配置
+    "fusion_config": {
+        "strategy": {
+            "fixed_qa_mode": "smart",
+            "qa_direct_threshold": 0.90,
+            "qa_suggest_threshold": 0.55,  # 降低阈值提高召回率
+            "qa_min_threshold": 0.50,
+            "bm25_threshold": 0.55,
+            "max_suggestions": 3
+        }
+    }
 }
 
 # 🌐 增强模式配置
 ENHANCED_MODE = {
     "priority_order": ["fixed_qa_exact", "vector_kb", "web_search", "ai_generation"],
+    "enable_fixed_qa": True,  # 显式启用Q&A
+    "enable_vector_kb": True,  # 启用向量知识库
+    "enable_web_search": True,  # 启用联网搜索
     "fixed_qa_threshold": 0.95,
     "vector_kb_threshold": 0.70,
     "web_search_auto_threshold": 0.50,
@@ -52,12 +77,23 @@ ENHANCED_MODE = {
     "enable_source_tracking": True,
     "enable_citation": True,
     "web_search_domains": [],  # 空列表表示不限制
-    "search_channels": ["official", "academic", "web"],
+    "search_channels": ["tavily", "google", "serper"],  # 搜索引擎优先级：Tavily > Google > Serper
     "fallback_message": "结合多个来源，我为您生成了以下答案：",
     "ai_generation_note": "【AI综合-建议核实】",
     "web_search_note": "【含联网信息】",
     "max_tokens": 2500,
-    "top_k": 8
+    "top_k": 8,
+    # Q&A匹配策略配置
+    "fusion_config": {
+        "strategy": {
+            "fixed_qa_mode": "smart",
+            "qa_direct_threshold": 0.95,
+            "qa_suggest_threshold": 0.60,
+            "qa_min_threshold": 0.55,
+            "bm25_threshold": 0.60,
+            "max_suggestions": 3
+        }
+    }
 }
 
 # 模式映射
@@ -114,6 +150,30 @@ MODE_DESCRIPTIONS = {
 }
 
 
+def deep_merge(base: dict, override: dict) -> dict:
+    """深度合并两个字典
+    
+    Args:
+        base: 基础字典
+        override: 覆盖字典（优先级更高）
+        
+    Returns:
+        合并后的字典
+    """
+    import copy
+    result = copy.deepcopy(base)
+    
+    for key, value in override.items():
+        if key in result and isinstance(result[key], dict) and isinstance(value, dict):
+            # 递归合并嵌套字典
+            result[key] = deep_merge(result[key], value)
+        else:
+            # 直接覆盖
+            result[key] = copy.deepcopy(value)
+    
+    return result
+
+
 def get_mode_config(mode: str, custom_config: dict = None) -> dict:
     """获取模式配置
     
@@ -124,12 +184,13 @@ def get_mode_config(mode: str, custom_config: dict = None) -> dict:
     Returns:
         完整的模式配置字典
     """
-    # 获取预设配置
-    preset = MODE_PRESETS.get(mode, MODE_PRESETS["standard"]).copy()
+    import copy
+    # 获取预设配置（深拷贝避免修改原始预设）
+    preset = copy.deepcopy(MODE_PRESETS.get(mode, MODE_PRESETS["standard"]))
     
-    # 如果有自定义配置，合并
+    # 如果有自定义配置，使用深度合并
     if custom_config:
-        preset.update(custom_config)
+        preset = deep_merge(preset, custom_config)
     
     return preset
 
